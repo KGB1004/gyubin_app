@@ -1,4 +1,5 @@
-<<<<<<< HEAD
+HEAD
+HEAD
 # Welcome to your Expo app 👋
 
 This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
@@ -58,4 +59,7 @@ Join our community of developers creating universal apps.
 =======
 # guebinapp
 guebinapp
->>>>>>> 8c952009011a5e2d26033db3d80782e83567ab9d
+8c952009011a5e2d26033db3d80782e83567ab9d
+=======
+# guebinproject
+d1f3992460c718df08dac0ded03cf7e03d9fac74
