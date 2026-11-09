@@ -1,21 +1,16 @@
+import * as ImagePicker from 'expo-image-picker';
 import { useEffect, useState } from 'react';
 import {
-  Alert,
-  Image,
-  Modal,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+  Alert, Image, Modal, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View,
 } from 'react-native';
-
 export default function SmartLibraryApp() {
+
   // 로그인 및 인증 상태 관리
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
+
+  const [isLoading, setIsLoading] = useState(false);       // 연타 방지용 로딩 상태
+const [referralCount, setReferralCount] = useState(0);   // 추천인 등록 횟수 (최대 3회)
   
   // 로그인/회원가입 입력 Form 상태
   const [authStudentId, setAuthStudentId] = useState('');
@@ -35,9 +30,11 @@ export default function SmartLibraryApp() {
   // 포인트로 변환한 상용 기프트콘 혜택 쿠폰함 목록 상태
   const [exchangedGifticons, setExchangedGifticons] = useState<any[]>([]);
   // 내 추천 코드
-  const myReferralCode = 'KUBIN2026';
+  const [myReferralCode, setMyReferralCode] = useState('');
   // 모달 팝업 제어 상태
   const [modalType, setModalType] = useState<string | null>(null);
+  // 사진 확대 보기 모달을 위한 상태 추가
+const [selectedPreviewImage, setSelectedPreviewImage] = useState<string[] | string | null>(null);
   // 대여 프로세스 세부 단계 제어
   const [rentStep, setRentStep] = useState<'selectBook' | 'selectType' | 'selectPayment'>('selectBook');
   const [selectedBookForRent, setSelectedBookForRent] = useState<any>(null);
@@ -45,12 +42,7 @@ export default function SmartLibraryApp() {
   
   // 도서 대여 검색어 상태
   const [searchQuery, setSearchQuery] = useState('');
-  // 2단계 보안 카운트다운 타이머 상태 (1분 = 60초 제한)
-  const [timeLeft, setTimeLeft] = useState(60);
-  // 2단계 시퀀셜 보안 인증 단계 상태
-  const [authStep, setAuthStep] = useState<'step1_keypad' | 'step2_assigned'>('step1_keypad');
   const [step1Pin, setStep1Pin] = useState<string>('');
-  const [step2Pin, setStep2Pin] = useState<string>('');
   
   const [activeLockerInfo, setActiveLockerInfo] = useState<string>('');
   const [highlightZone, setHighlightZone] = useState<string>('');
@@ -75,7 +67,7 @@ export default function SmartLibraryApp() {
     id: string;
     date: string;
     detail: string;
-    image: string;
+    images: string[];
     reporter: string;
   }
 
@@ -96,14 +88,14 @@ export default function SmartLibraryApp() {
     initialHours: number;
     rentalTimeLeft: number;
     image: string;
+    images?: string[];
     reports: Report[];
   }
 
-  // 도서 목록 상태 및 서버 fetch 연동 코드
  // 도서 목록 상태 및 서버 fetch 연동 코드
   const [books, setBooks] = useState<Book[]>([]);
 
-  // ▼ [수정 1] fetchBooks 함수를 useEffect 바깥(컴포넌트 최상단)으로 분리
+  // fetchBooks 함수를 useEffect 바깥(컴포넌트 최상단)으로 분리
   const fetchBooks = async () => {
     if (!isLoggedIn) return; // 로그인 상태가 아닐 경우 도서 목록 조회 안 함
     try {
@@ -114,7 +106,7 @@ export default function SmartLibraryApp() {
   },
 });
       if (!response.ok) {
-        // ⬅️ 아래 줄들을 추가해서 서버가 보낸 에러 내용을 터미널에 확인해보세요!
+        // 서버가 보낸 에러 내용을 터미널에 확인
   const errorText = await response.text();
   console.log("서버가 도서 목록 조회를 거절한 이유:", errorText);
 
@@ -123,6 +115,17 @@ export default function SmartLibraryApp() {
       const serverData = await response.json();
       console.log("서버에서 받아온 책 목록 원본 데이터:", serverData);
       const mappedBooks = serverData.map((item: any) => {
+let parsedBookImages: string[] = [];
+  if (item.image) {
+    try {
+      const parsed = JSON.parse(item.image);
+      parsedBookImages = Array.isArray(parsed) 
+        ? parsed.map((uri: string) => uri.startsWith('/uploads/') ? `https://snappingly-noncarnivorous-taren.ngrok-free.dev${uri}` : uri) 
+        : [item.image];
+    } catch (e) {
+      parsedBookImages = [item.image];
+    }
+  }
       let calculatedLeft = 3600; // 기본값 1시간
 
       if (item.rentalDueDate) {
@@ -140,6 +143,12 @@ export default function SmartLibraryApp() {
         calculatedLeft = item.rentalTimeLeft;
       }
 
+      const existingBook = books.find((b) => b.id === String(item.id || item.book_id || ''));
+  let finalRentalTimeLeft = calculatedLeft;
+  if (existingBook && existingBook.status === '대여 중' && existingBook.rentalTimeLeft > 0) {
+    finalRentalTimeLeft = existingBook.rentalTimeLeft;
+  }
+
       return {
         id: String(item.id || item.book_id || ''),
         title: item.title || '',
@@ -155,15 +164,43 @@ export default function SmartLibraryApp() {
         extensionCount: item.extensionCount || 0,
         maxExtensions: (item.rentalHours === 24 || calculatedLeft > 10800) ? 0 : (item.maxExtensions ?? 2),
 initialHours: (item.rentalHours === 24 || calculatedLeft > 10800) ? 24 : (item.initialHours || 1),
-        rentalTimeLeft: calculatedLeft,
-        image: item.image || 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300',
-        reports: (item.reports || []).map((rep: any) => ({
-      id: String(rep.id || ''),
-      date: rep.date || rep.report_time || '',
-      detail: rep.detail || rep.content || '', // 👈 서버 DB의 content를 detail로 연결!
-      image: rep.image || '',
-      reporter: rep.reporter || '',
-    })),
+        rentalTimeLeft: finalRentalTimeLeft,
+        image: parsedBookImages.length > 0 ? parsedBookImages[0] : 'https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300',
+    images: parsedBookImages,
+       reports: (item.reports || []).map((rep: any) => {
+  let parsedImages: string[] = [];
+  
+  // 1. rep.images 또는 rep.image를 안전한 문자열 배열로 파싱 및 정제
+  const rawImages = rep.images || rep.image;
+  if (rawImages) {
+    if (Array.isArray(rawImages)) {
+      parsedImages = rawImages;
+    } else if (typeof rawImages === 'string') {
+      try {
+        const parsed = JSON.parse(rawImages);
+        parsedImages = Array.isArray(parsed) ? parsed : [rawImages];
+      } catch (e) {
+        parsedImages = [rawImages];
+      }
+    }
+  }
+
+  return {
+    id: String(rep.id || ''),
+    date: rep.date || rep.report_time || '',
+    detail: rep.detail || rep.content || '',
+    // 빈 문자열이거나 유효하지 않은 값은 필터링하여 오직 정상적인 URI만 담음
+    images: parsedImages
+      .filter((uri: any) => typeof uri === 'string' && uri.trim().length > 0)
+      .map((uri: string) => {
+        if (uri.startsWith('/uploads/')) {
+          return `https://snappingly-noncarnivorous-taren.ngrok-free.dev${uri}`;
+        }
+        return uri;
+      }),
+    reporter: rep.reporter || '',
+  };
+}),
   };
 });
       setBooks(mappedBooks);
@@ -172,9 +209,52 @@ initialHours: (item.rentalHours === 24 || calculatedLeft > 10800) ? 24 : (item.i
     }
   };
 
-  // ▼ [수정 2] useEffect는 선언된 fetchBooks 함수를 호출만 하도록 아주 짧게 변경
+ const fetchLimitSwitches = async () => {
+  if (!isLoggedIn) return;
+  try {
+    const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+    const response = await fetch(`${serverUrl}/api/sensors/logs`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420' 
+      },
+      body: JSON.stringify({})
+    });
+    
+    if (!response.ok) return;
+    
+    const sensorLogs = await response.json();
+    console.log("📦 서버에서 받아온 센서 로그:", sensorLogs);
+
+    // ★ [핵심] 배열이든 단일 객체이든 모두 배열로 감싸서 안전하게 처리
+    const logsArray = Array.isArray(sensorLogs) ? sensorLogs : [sensorLogs];
+
+    const updatedSwitches = { ...limitSwitches };
+    logsArray.forEach((log: any) => {
+      if (!log) return;
+      const storage = log.storageNo || '제1보관함 (전공서적)';
+      const locker = log.lockerNo || '1구역';
+      const key = `${storage}-${locker}`;
+      
+      if (log.isOccupied !== undefined) {
+        updatedSwitches[key] = log.isOccupied;
+      } else if (log.status !== undefined) {
+        updatedSwitches[key] = log.status;
+      } else if (log.limitSwitchStatus !== undefined) {
+        updatedSwitches[key] = log.limitSwitchStatus;
+      }
+    });
+    setLimitSwitches(updatedSwitches);
+
+  } catch (error) {
+    console.error(" 리미트 스위치 통신 에러:", error);
+  }
+};
+  // useEffect는 선언된 fetchBooks 함수를 호출만 하도록 짧게 변경
   useEffect(() => {
     fetchBooks();
+    fetchLimitSwitches();
   }, [isLoggedIn]);
 
   // 신규 책 등록 폼 상태
@@ -185,7 +265,7 @@ initialHours: (item.rentalHours === 24 || calculatedLeft > 10800) ? 24 : (item.i
   const [newOwnerPin, setNewOwnerPin] = useState('');
   const [selectedStorage, setSelectedStorage] = useState('제1보관함 (전공서적)');
   const [selectedCondition, setSelectedCondition] = useState('A급');
-  const [bookImageUri, setBookImageUri] = useState('https://images.unsplash.com/photo-1512820790803-83ca734da794?w=300');
+  const [bookImageUris, setBookImageUris] = useState<string[]>([]);
   
   // 친구 추천 코드 입력 상태
   const [inputReferralCode, setInputReferralCode] = useState('');
@@ -193,7 +273,7 @@ initialHours: (item.rentalHours === 24 || calculatedLeft > 10800) ? 24 : (item.i
   // 분실/파손 신고 관련 상태
   const [selectedBookForReport, setSelectedBookForReport] = useState<any>(null);
   const [reportDetail, setReportDetail] = useState('');
-  const [reportImageUri, setReportImageUri] = useState('https://images.unsplash.com/photo-1589829085413-56de8ae18c73?w=300');
+  const [reportImageUris, setReportImageUris] = useState<string[]>([]);
   const [reportCurrentDate, setReportCurrentDate] = useState('');
 
   // 원주인 인증 및 판별 상태
@@ -202,26 +282,25 @@ initialHours: (item.rentalHours === 24 || calculatedLeft > 10800) ? 24 : (item.i
   const [enteredOwnerPin, setEnteredOwnerPin] = useState('');
   const [isOwnerVerified, setIsOwnerVerified] = useState(false);
 
-  // 로그인 및 회원가입 처리 함수
 const handleLogin = async () => {
   if (!authStudentId || !authPin) {
     Alert.alert('오류', '학번과 고유 비밀번호를 모두 입력해주세요.');
     return;
   }
-
   try {
     const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
-
+    
+    // 원본 코드에서 정상 작동하던 파라미터 형태('studentld') 그대로 전송
     const response = await fetch(`${serverUrl}/api/login`, {
-  method: 'POST',
-  headers: { 
-    'Content-Type': 'application/json',
-    'ngrok-skip-browser-warning': '69420', // ⬅️ 여기 추가
-  },
-  body: JSON.stringify({ studentId: authStudentId, pin: authPin }),
-});
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify({ studentId: authStudentId, pin: authPin }),
+    });
 
-    const textData = await response.text(); // 에러 발생 시 텍스트로 먼저 받기
+    const textData = await response.text();
     let data;
     try {
       data = JSON.parse(textData);
@@ -233,10 +312,22 @@ const handleLogin = async () => {
     if (response.ok && data.success) {
       setCurrentUser({ studentId: authStudentId, name: data.name, pin: authPin });
       setNewOwnerName(data.name);
-      setUserPoints(data.points !== undefined ? data.points : 1000);
+
+      // ★ [포인트 연동 핵심] 서버가 주는 실제 포인트(pointBalance)를 앱 상태에 정확히 반영!
+      // 만약 pointBalance가 없으면 기존 data.points나 기본값 1000을 사용합니다.
+      const realPoints = data.pointBalance !== undefined 
+        ? data.pointBalance 
+        : (data.points !== undefined ? data.points : 1000);
+      setUserPoints(realPoints);
+
+      // 원본 코드의 올바른 쿠폰 세터 함수명('setRentalCoupons') 사용
       setRentalCoupons(data.coupons || []);
       setUserStamps(data.stamps || 0);
+      setExchangedGifticons(data.exchangedGifticons || data.gifticons || []);
+      
+      setMyReferralCode(`USER_${authStudentId}`);
       setIsLoggedIn(true);
+      
       Alert.alert('로그인 성공', `${data.name}님 환영합니다!`);
     } else {
       Alert.alert('로그인 실패', data.message || '학번 또는 고유 비밀번호가 일치하지 않습니다.');
@@ -289,7 +380,7 @@ const handleLogin = async () => {
           setAuthPin('');
           setAuthName('');
           
-          // ▼ [수정] 로그아웃 시 다음 사용자를 위해 모든 개인 데이터 초기화
+          // 로그아웃 시 다음 사용자를 위해 모든 개인 데이터 초기화
           setUserPoints(1000);
           setUserStamps(0);
           setRentalCoupons([]);
@@ -351,20 +442,6 @@ const handleLogin = async () => {
     return () => clearInterval(countdownTimer);
   }, []); // 의존성 배열을 비워두어 앱 실행 내내 안정적으로 타이머가 작동하게 합니다.
 
-  // 보안 인증 타이머 훅
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>;
-    if (modalType === 'pinAuth' && timeLeft > 0) {
-      timer = setInterval(() => {
-        setTimeLeft((prev) => prev - 1);
-      }, 1000);
-    } else if (modalType === 'pinAuth' && timeLeft === 0) {
-      Alert.alert('시간 초과', '보안 인증 시간(60초)이 만료되었습니다. 다시 시도해주세요.');
-      setModalType(null);
-    }
-    return () => clearInterval(timer);
-  }, [modalType, timeLeft]);
-
   const generateRandomPin = () => {
     return Math.floor(1000 + Math.random() * 9000).toString();
   };
@@ -382,19 +459,63 @@ const handleLogin = async () => {
       'https://images.unsplash.com/photo-1512820790803-83ca734da794?w=300'
     ];
     const randomImg = sampleImages[Math.floor(Math.random() * sampleImages.length)];
-    setBookImageUri(randomImg);
+    setBookImageUris([randomImg]);
     Alert.alert('사진 등록 완료', '도서 실물 사진이 성공적으로 첨부되었습니다.');
   };
 
-  const handlePickReportImage = () => {
-    const sampleImages = [
-      'https://images.unsplash.com/photo-1512820790803-83ca734da794?w=300',
-      'https://images.unsplash.com/photo-1589829085413-56de8ae18c73?w=300'
-    ];
-    const randomImg = sampleImages[Math.floor(Math.random() * sampleImages.length)];
-    setReportImageUri(randomImg);
-    Alert.alert('사진 첨부 완료', '파손/분실 부위 사진이 첨부되었습니다.');
-  };
+const handlePickReportImage = async () => {
+  try {
+    const cameraPermission = await ImagePicker.requestCameraPermissionsAsync();
+    const libraryPermission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+    if (!cameraPermission.granted || !libraryPermission.granted) {
+      Alert.alert('권한 거부', '사진을 첨부하려면 카메라 및 갤러리 접근 권한이 모두 필요합니다.');
+      return;
+    }
+
+    Alert.alert(
+      '파손/분실 사진 여러 장 첨부',
+      '사진을 가져올 방법을 선택해주세요.',
+      [
+        { text: '취소', style: 'cancel' },
+        {
+          text: '카메라로 촬영하기',
+          onPress: async () => {
+            const result = await ImagePicker.launchCameraAsync({
+              mediaTypes: ImagePicker.MediaTypeOptions.Images,
+              allowsEditing: true,
+              aspect: [4, 3],
+              quality: 0.8,
+            });
+
+            if (!result.canceled && result.assets && result.assets.length > 0) {
+              const newUri = result.assets[0].uri;
+              setReportImageUris((prev) => [...prev, newUri]);
+            }
+          },
+        },
+        {
+          text: '앨범에서 여러 장 선택하기',
+          onPress: async () => {
+            const result = await ImagePicker.launchImageLibraryAsync({
+              mediaTypes: ImagePicker.MediaTypeOptions.Images,
+              allowsMultipleSelection: true, // 여러 장 선택 허용
+              quality: 0.8,
+            });
+
+            if (!result.canceled && result.assets && result.assets.length > 0) {
+              const newUris = result.assets.map((asset) => asset.uri);
+              setReportImageUris((prev) => [...prev, ...newUris]);
+            }
+          },
+        },
+      ],
+      { cancelable: true }
+    );
+  } catch (error) {
+    console.error('사진 다중 첨부 에러:', error);
+  }
+};
 
   const openReportModal = () => {
     const myRentedBooks = books.filter((b) => b.borrower === currentUser.name);
@@ -410,7 +531,7 @@ const handleLogin = async () => {
     setModalType('damageReport');
   };
 
-  const handleSubmitReport = async () => {
+const handleSubmitReport = async () => {
   if (!reportDetail) {
     Alert.alert('오류', '상세 내용을 입력해주세요.');
     return;
@@ -423,35 +544,50 @@ const handleLogin = async () => {
   try {
     const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
     
-    // 1. 서버 DB에 파손/분실 신고 전송
+    const formData = new FormData();
+    formData.append('bookId', String(selectedBookForReport.id));
+    formData.append('reporter', currentUser.name);
+    formData.append('detail', reportDetail);
+    formData.append('date', reportCurrentDate);
+
+    // 사진 전송 시 에러 해결 및 표준 데이터 변환 로직
+    for (const [index, uri] of reportImageUris.entries()) {
+      const filename = uri.split('/').pop() || `report_${index}.jpg`;
+      const match = /\.(\w+)$/.exec(filename);
+      const type = match ? `image/${match[1]}` : `image/jpeg`;
+
+      // 로컬 파일 URI를 Blob 객체로 변환해 FormData에 추가
+      const imgResponse = await fetch(uri);
+      const blob = await imgResponse.blob();
+
+      formData.append('images', blob, filename);
+    }
+
     const response = await fetch(`${serverUrl}/api/reports`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json',
-       'ngrok-skip-browser-warning': '69420' 
-       },
-      body: JSON.stringify({
-        bookId: selectedBookForReport.id,
-        reporter: currentUser.name,
-        detail: reportDetail,
-        image: reportImageUri,
-        date: reportCurrentDate,
-      }),
+      headers: { 
+        'ngrok-skip-browser-warning': '69420'
+        
+      },
+      body: formData,
     });
 
     if (!response.ok) {
+      const errorText = await response.text();
+      console.log("신고 서버 거절 이유:", errorText);
       throw new Error('서버 신고 접수 실패');
     }
 
     Alert.alert(
-      '파손/분실 신고 접수 완료',
+      '파손/분실 신고 접수 완료', 
       `[접수일시: ${reportCurrentDate}]\n책 주인(${selectedBookForReport.owner})님에게 알림이 전송되었습니다.`
     );
-
     setModalType(null);
     setReportDetail('');
+    setReportImageUris([]); // 이미지 목록 초기화
     
-    // 2. 서버에서 최신 도서 및 신고 목록을 다시 불러와 화면 동기화
-    fetchBooks(); 
+    // 최신 도서 및 신고 목록 동기화
+    fetchBooks();
   } catch (error) {
     console.error('신고 통신 에러:', error);
     Alert.alert('오류', '신고 통신 중 문제가 발생했습니다.');
@@ -544,22 +680,44 @@ const handleLogin = async () => {
     );
   };
 
-  const handleExchangeGifticon = (giftName: string) => {
-    const cost = 1000;
-    if (userPoints < cost) {
-      Alert.alert('포인트 부족', `포인트가 부족합니다! (필요: ${cost}P / 보유: ${userPoints}P)`);
-      return;
+  const handleExchangeGifticon = async (giftName: string) => {
+  const cost = 1000;
+  if (userPoints < cost) {
+    Alert.alert('포인트 부족', `포인트가 부족합니다! (필요: ${cost}P / 보유: ${userPoints}P)`);
+    return;
+  }
+
+  try {
+    const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+    const response = await fetch(`${serverUrl}/api/gifticons/exchange`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420'
+      },
+      body: JSON.stringify({
+        studentId: currentUser.studentId, // 내 학번
+        giftName: giftName,               // 교환할 기프트콘 이름
+        cost: cost                        // 차감할 포인트 (1000P)
+      })
+    });
+
+    const data = await response.json();
+    if (response.ok && data.success) {
+      // 서버에서 갱신된 포인트와 최신 교환 쿠폰 목록 반영
+      setUserPoints(data.updatedPoints);
+      setExchangedGifticons(data.exchangedGifticons || []);
+      
+      Alert.alert('기프트콘 변환 완료!', `[${giftName}]\n성공적으로 교환되었습니다! (-1,000P)`);
+      setModalType(null);
+    } else {
+      Alert.alert('교환 실패', data.message || '포인트 교환 중 문제가 발생했습니다.');
     }
-    setUserPoints(userPoints - cost);
-    const newCoupon = {
-      id: Date.now().toString(),
-      name: giftName,
-      date: `${new Date().getFullYear()}.${String(new Date().getMonth() + 1).padStart(2, '0')}.${String(new Date().getDate()).padStart(2, '0')} 교환됨`,
-    };
-    setExchangedGifticons([newCoupon, ...exchangedGifticons]);
-    Alert.alert('기프트콘 변환 완료!', `[${giftName}]\n성공적으로 교환되었습니다! (-1,000P)`);
-    setModalType(null);
-  };
+  } catch (error) {
+    console.error('기프트콘 교환 통신 에러:', error);
+    Alert.alert('서버 오류', '서버와 통신할 수 없습니다.');
+  }
+};
 
   const handleSelectBookItem = (book: any) => {
     setSelectedBookForRent(book);
@@ -571,308 +729,491 @@ const handleLogin = async () => {
     setRentStep('selectPayment');
   };
 
-  const initiateRentProcess = (paymentMethod: string) => {
-    const totalRequiredPoints = selectedBookForRent && selectedRentalType
-      ? calculateRequiredPoints(selectedRentalType.hours, selectedBookForRent.condition)
-      : 100;
-    if (paymentMethod === 'points' && userPoints < totalRequiredPoints) {
-      Alert.alert('알림', `포인트가 부족합니다! (필요 포인트: ${totalRequiredPoints}P)`);
-      return;
-    }
-    if (paymentMethod !== 'points' && rentalCoupons.length <= 0) {
-      Alert.alert('알림', '사용 가능한 도서 대여 쿠폰이 없습니다.');
-      return;
-    }
-    const targetBook = selectedBookForRent;
-    if (!targetBook) return;
-    setStep1Pin(generateRandomPin());
-    setAuthStep('step1_keypad');
-    setTimeLeft(60);
-    setPendingActionData({ type: 'rent', bookId: targetBook.id, targetBook, paymentMethod, rentalType: selectedRentalType, totalRequiredPoints });
-    setActiveLockerInfo('도서 대여 도어락 개방');
-    setHighlightZone(`${targetBook.storageNo}\n${targetBook.lockerNo}`);
-    setModalType('pinAuth');
-  };
+const initiateRentProcess = async (paymentMethod: string) => {
+  const totalRequiredPoints = selectedBookForRent && selectedRentalType
+    ? calculateRequiredPoints(selectedRentalType.hours, selectedBookForRent.condition)
+    : 100;
 
-  const initiateReturnProcess = (bookId: string) => {
-    const targetBook = books.find((b) => b.id === bookId);
-    if (!targetBook) return;
-    setStep1Pin(generateRandomPin());
-    setAuthStep('step1_keypad');
-    setTimeLeft(60);
-    setPendingActionData({ type: 'return', bookId: targetBook.id, storageNo: targetBook.storageNo, lockerNo: targetBook.lockerNo });
-    setActiveLockerInfo('선택한 도서 반납 구역');
-    setHighlightZone(`${targetBook.storageNo}\n${targetBook.lockerNo}`);
-    setModalType('pinAuth');
-  };
+  if (paymentMethod === 'points' && userPoints < totalRequiredPoints) {
+    Alert.alert('알림', `포인트가 부족합니다! (필요 포인트: ${totalRequiredPoints}P)`);
+    return;
+  }
+  if (paymentMethod !== 'points' && rentalCoupons.length <= 0) {
+    Alert.alert('알림', '사용 가능한 도서 대여 쿠폰이 없습니다.');
+    return;
+  }
 
-  const initiateRegisterProcess = () => {
-    if (!newTitle || !newAuthor) {
-      Alert.alert('오류', '책 이름과 저자를 입력해주세요.');
-      return;
-    }
-    const zones = ['1구역', '2구역', '3구역', '4구역', '5구역'];
-    const emptyZone = zones.find((zone) => limitSwitches[`${selectedStorage}-${zone}`] === false);
-    if (!emptyZone) {
-      Alert.alert('보관함 만석', `선택하신 [${selectedStorage}]의 모든 구역이 가득 찼습니다.`);
-      return;
-    }
-    setStep1Pin(generateRandomPin());
-    setAuthStep('step1_keypad');
-    setTimeLeft(60);
-    setPendingActionData({
-      type: 'register',
-      bookInfo: {
-        id: Date.now().toString(),
-        title: newTitle,
-        author: newAuthor,
-        publisher: newPublisher || '기타출판사',
-        condition: selectedCondition,
-        storageNo: selectedStorage,
-        lockerNo: emptyZone,
-        status: '대여 가능',
-        owner: currentUser.name,        // 로그인한 사용자 이름 자동 연동
-        ownerPin: currentUser.pin,      // 회원가입 시 등록한 고유 비밀번호(PIN) 자동 연동
-        borrower: '',
-        extensionCount: 0,
-        maxExtensions: 2,
-        initialHours: 1,
-        rentalTimeLeft: 0,
-        image: bookImageUri,
-        reports: [],
-      },
-    });
-    setActiveLockerInfo('자동 배정된 보관 구역');
-    setHighlightZone(`${selectedStorage}\n${emptyZone}`);
-    setModalType('pinAuth');
-  };
+  const targetBook = selectedBookForRent;
+  if (!targetBook) return;
 
-  const initiateRetrieveProcess = (bookId: string) => {
-    const targetBook = books.find((b) => b.id === bookId);
-    if (!targetBook) return;
-    if (targetBook.status === '대여 중') {
-      Alert.alert('회수 불가', '현재 다른 사용자가 대여 중인 도서는 회수할 수 없습니다.');
-      return;
-    }
-    setStep1Pin(generateRandomPin());
-    setAuthStep('step1_keypad');
-    setTimeLeft(60);
-    setPendingActionData({ type: 'retrieve', bookId, targetBook });
-    setActiveLockerInfo('도서 회수 위치');
-    setHighlightZone(`${targetBook.storageNo}\n${targetBook.lockerNo}`);
-    setModalType('pinAuth');
-  };
+  const newPin = generateRandomPin();
+  setStep1Pin(newPin);
 
-  const handleStep1KeypadSuccess = () => {
-    const newAssignedPin = generateRandomPin();
-    setStep2Pin(newAssignedPin);
-    setAuthStep('step2_assigned');
-  };
-
-  const handleFinalDoorOpenConfirm = async () => {
-    const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
-    if (pendingActionData.type === 'register') {
   try {
-    const newBookInfo = pendingActionData.bookInfo;
-    const response = await fetch(`${serverUrl}/api/books`, {
+    const slotInt = parseInt(targetBook.lockerNo.replace(/[^0-9]/g, '')) || 1;
+    const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+    
+    await fetch(`${serverUrl}/api/rentals/auth-code`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json',
+      headers: {
+        'Content-Type': 'application/json',
         'ngrok-skip-browser-warning': '69420'
-       },
+      },
       body: JSON.stringify({
-        title: newBookInfo.title,
-        author: newBookInfo.author,
-        publisher: newBookInfo.publisher,
-        condition: newBookInfo.condition,
-        storageNo: newBookInfo.storageNo,
-        lockerNo: newBookInfo.lockerNo,
-        owner: newBookInfo.owner,
-        ownerPin: newBookInfo.ownerPin,
-        image: newBookInfo.image,
+        cabinetSlot: slotInt,
+        auth_code_1: newPin,
       }),
     });
 
-    const responseText = await response.text();
-    const rawBookFromDB = responseText ? JSON.parse(responseText) : {};
+    setPendingActionData({
+      type: 'rent',
+      bookId: targetBook.id,
+      targetBook,
+      paymentMethod,
+      rentalType: selectedRentalType,
+      totalRequiredPoints,
+      auth_code_1: newPin,
+    });
+    
+    setActiveLockerInfo('도서 대여 도어락 개방');
+    setHighlightZone(`${targetBook.storageNo}\n${targetBook.lockerNo}`);
+    setModalType('pinAuth');
+  } catch (error) {
+    console.error("대여 인증번호 동기화 에러:", error);
+    Alert.alert('오류', '서버 통신 중 문제가 발생했습니다.');
+  }
+};
 
-    if (response.ok) {
-      // 서버 DB에 포인트 100점 증가 요청
-try {
-  await fetch(`${serverUrl}/api/users/points`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json',
-      'ngrok-skip-browser-warning': '69420'
-     },
-    body: JSON.stringify({
-      studentId: currentUser.studentId, // 👈 username 대신 studentId 전송!
-      points: userPoints + 100,         // 👈 amount 대신 최종 포인트(현재 + 100) 전송!
-    }),
+// 도서 보관 시 다중 사진 촬영 및 앨범 선택 함수
+const handlePickBookImages = async () => {
+  try {
+    const cameraPermission = await ImagePicker.requestCameraPermissionsAsync();
+    const libraryPermission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+    if (!cameraPermission.granted || !libraryPermission.granted) {
+      Alert.alert('권한 거부', '사진을 첨부하려면 카메라 및 갤러리 접근 권한이 모두 필요합니다.');
+      return;
+    }
+
+    Alert.alert(
+      '도서 실물 사진 다중 첨부',
+      '사진을 가져올 방법을 선택해주세요.',
+      [
+        { text: '취소', style: 'cancel' },
+        {
+          text: '카메라로 촬영하기',
+          onPress: async () => {
+            const result = await ImagePicker.launchCameraAsync({
+              mediaTypes: ImagePicker.MediaTypeOptions.Images,
+              allowsEditing: true,
+              aspect: [4, 3],
+              quality: 0.8,
+            });
+            if (!result.canceled && result.assets && result.assets.length > 0) {
+              const newUri = result.assets[0].uri;
+              setBookImageUris((prev) => [...prev, newUri]);
+            }
+          },
+        },
+        {
+          text: '앨범에서 여러 장 선택하기',
+          onPress: async () => {
+            const result = await ImagePicker.launchImageLibraryAsync({
+              mediaTypes: ImagePicker.MediaTypeOptions.Images,
+              allowsMultipleSelection: true, // 다중 선택 허용
+              quality: 0.8,
+            });
+            if (!result.canceled && result.assets && result.assets.length > 0) {
+              const newUris = result.assets.map((asset) => asset.uri);
+              setBookImageUris((prev) => [...prev, ...newUris]);
+            }
+          },
+        },
+      ],
+      { cancelable: true }
+    );
+  } catch (error) {
+    console.error('도서 사진 다중 첨부 에러:', error);
+  }
+};
+
+const initiateReturnProcess = async (bookId: string) => {
+  const targetBook = books.find((b) => b.id === bookId);
+  if (!targetBook) return;
+
+  const newPin = generateRandomPin();
+  setStep1Pin(newPin);
+
+  try {
+    const slotInt = parseInt(targetBook.lockerNo.replace(/[^0-9]/g, '')) || 1;
+    const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+
+    const response = await fetch(`${serverUrl}/api/rentals/auth-code`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420'
+      },
+      body: JSON.stringify({
+        cabinetSlot: slotInt,
+        auth_code_1: newPin,
+        auth_code_2: "",
+      }),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.log("반납 인증번호 동기화 거절 이유:", errText);
+      Alert.alert('오류', '인증번호를 서버에 동기화하지 못했습니다.');
+      return;
+    }
+
+    setPendingActionData({
+      type: 'return',
+      bookId: targetBook.id,
+      storageNo: targetBook.storageNo,
+      lockerNo: targetBook.lockerNo
+    });
+    
+    setActiveLockerInfo('선택한 도서 반납 구역');
+    setHighlightZone(`${targetBook.storageNo}\n${targetBook.lockerNo}`);
+    setModalType('pinAuth');
+  } catch (error) {
+    console.error("반납 인증번호 동기화 에러:", error);
+    Alert.alert('오류', '서버 통신 중 문제가 발생했습니다.');
+  }
+};
+
+const initiateRetrieveProcess = async (bookId: string) => {
+  const targetBook = books.find((b) => b.id === bookId);
+  if (!targetBook) return;
+  if (targetBook.status === '대여 중') {
+    Alert.alert('회수 불가', '현재 다른 사용자가 대여 중인 도서는 회수할 수 없습니다.');
+    return;
+  }
+
+  const newPin = generateRandomPin();
+  setStep1Pin(newPin);
+
+  setPendingActionData({
+    type: 'retrieve',
+    bookId,
+    targetBook
   });
-} catch (pErr) {
-  console.error('포인트 적립 통신 실패:', pErr);
-}
+
+  setActiveLockerInfo('도서 회수 위치');
+  setHighlightZone(`${targetBook.storageNo}\n${targetBook.lockerNo}`);
+  setModalType('pinAuth');
+};
+
+const initiateRegisterProcess = async () => {
+  console.log("👉 [디버깅] '빈자리 자동 배정 및 인증 시작' 버튼이 눌렸습니다!");
+  if (!newTitle || !newAuthor) {
+    Alert.alert('오류', '책 이름과 저자를 입력해주세요.');
+    return;
+  }
+  const zones = ['1구역', '2구역', '3구역', '4구역', '5구역'];
+  const emptyZone = zones.find((zone) => limitSwitches[`${selectedStorage}-${zone}`] === false);
+  if (!emptyZone) {
+    Alert.alert('보관함 만석', `선택하신 [${selectedStorage}]의 모든 구역이 가득 찼습니다.`);
+    return;
+  }
+
+  // 1단계 인증 코드 생성
+  const pin1 = generateRandomPin();
+
+  setStep1Pin(pin1);
+
+    setPendingActionData({
+      type: 'register',
+      bookData: {
+        title: newTitle,
+        author: newAuthor,
+        storageNo: selectedStorage,
+        lockerNo: emptyZone,
+        publisher: newPublisher || '기타출판사',
+        condition: selectedCondition,
+        owner: currentUser.name,
+        ownerPin: currentUser.pin,
+        auth_code_1: pin1,
+        images: bookImageUris
+      }
+    });
+
+    setActiveLockerInfo('자동 배정된 보관 구역');
+    setHighlightZone(`${selectedStorage}\n${emptyZone}`);
+    setModalType('pinAuth');
+
+};
+
+const handleStep1KeypadSuccess = async () => {
+  try {
+    const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+    const currentLockerNo = pendingActionData?.targetBook?.lockerNo || pendingActionData?.lockerNo || '1구역';
+    const slotInt = parseInt(String(currentLockerNo).replace(/[^0-9]/g, '')) || 1;
+
+    // ★ 작업 종류(type)에 따라 올바른 API 주소 선택
+    // - 대여(rent), 반납(return) -> /api/app/verify-rental-step1
+    // - 보관(register), 회수(retrieve) -> /api/app/verify-storage-step1
+    const isRentalOrReturn = pendingActionData?.type === 'rent' || pendingActionData?.type === 'return';
+    const verifyEndpoint = isRentalOrReturn 
+      ? '/api/app/verify-rental-step1' 
+      : '/api/app/verify-storage-step1';
+
+    console.log(`🔍 [1단계 검증] ${verifyEndpoint} 요청 - 수납장:`, slotInt);
+
+    const response = await fetch(`${serverUrl}${verifyEndpoint}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420'
+      },
+      body: JSON.stringify({
+        cabinetSlot: slotInt,
+        authCode: step1Pin,
+        auth_code_1: step1Pin
+      }),
+    });
+
+    const data = await response.json();
+    console.log("서버 인증 상태 응답:", data);
+
+    if (!response.ok || data.open !== true) {
+      Alert.alert('인증 실패', '키패드 비밀번호가 일치하지 않습니다. 다시 확인해주세요!');
+      return; 
+    }
+
+    // --- 인증 성공 시 각 작업 최종 완료 처리 수행 ---
+
+    // 1️⃣ [보관] 인증 성공 직후에 서버로 책 데이터 최종 등록 전송 (미리 등록 방지)
+    if (pendingActionData?.type === 'register') {
+      const bookInfo = pendingActionData.bookData;
+      const formData = new FormData();
+      
+      formData.append('title', bookInfo.title);
+      formData.append('author', bookInfo.author);
+      formData.append('publisher', bookInfo.publisher);
+      formData.append('condition', bookInfo.condition);
+      formData.append('storageNo', bookInfo.storageNo);
+      formData.append('lockerNo', bookInfo.lockerNo);
+      formData.append('owner', bookInfo.owner);
+      formData.append('ownerPin', bookInfo.ownerPin);
+      formData.append('auth_code_1', bookInfo.auth_code_1);
+
+      if (bookInfo.images && bookInfo.images.length > 0) {
+        for (const [index, uri] of bookInfo.images.entries()) {
+          const filename = uri.split('/').pop() || `book_${index}.jpg`;
+          const match = /\.(\w+)$/.exec(filename);
+          const type = match ? `image/${match[1]}` : `image/jpeg`;
+          const imgResponse = await fetch(uri);
+          const blob = await imgResponse.blob();
+          formData.append('images', blob, filename);
+        }
+      }
+
+      const registerResponse = await fetch(`${serverUrl}/api/books`, {
+        method: 'POST',
+        headers: { 'ngrok-skip-browser-warning': '69420' },
+        body: formData,
+      });
+
+      if (!registerResponse.ok) {
+        throw new Error('서버 도서 등록 실패');
+      }
 
       setUserPoints((prev) => prev + 100);
-
-      const savedBookFromDB = {
-        id: String(rawBookFromDB.id || rawBookFromDB.book_id || Date.now()),
-        title: rawBookFromDB.title || newBookInfo.title,
-        author: rawBookFromDB.author || newBookInfo.author,
-        publisher: rawBookFromDB.publisher || newBookInfo.publisher || '기타출판사',
-        condition: rawBookFromDB.condition || newBookInfo.condition || 'A급',
-        storageNo: rawBookFromDB.storageNo || newBookInfo.storageNo || '제1보관함 (전공서적)',
-        lockerNo: rawBookFromDB.lockerNo || newBookInfo.lockerNo || '1구역',
-        status: '대여 가능',
-        owner: rawBookFromDB.owner || newBookInfo.owner,
-        ownerPin: rawBookFromDB.ownerPin || newBookInfo.ownerPin,
-        borrower: '',
-        extensionCount: 0,
-        maxExtensions: 2,
-        initialHours: 1,
-        rentalTimeLeft: 3600,
-        image: rawBookFromDB.image || newBookInfo.image || 'https://images.unsplash.com/photo-1543002588-bfa74002ed7e?w=300',
-        reports: [],
-      };
-
-      setBooks((prev) => [...prev, savedBookFromDB]);
       Alert.alert('보관 완료', '보관함 문이 열렸습니다. 책을 넣어주세요! (+100 포인트 적립)');
       fetchBooks();
-    } else {
-      Alert.alert('오류', '도서 등록에 실패했습니다.');
-    }
-  } catch (error) {
-    console.error('도서 등록 통신 에러:', error);
-    Alert.alert('오류', '서버 통신 중 오류가 발생했습니다.');
-  }
-} else if (pendingActionData.type === 'rent') {
-  const rentalType = pendingActionData.rentalType;
-  const paymentMethod = pendingActionData.paymentMethod;
-  const totalCost = pendingActionData.totalRequiredPoints;
-  const targetBook = pendingActionData.targetBook;
-  try {
-        // 전송하기 전에 값이 제대로 잡혀 있는지 콘솔로 확인
-        console.log("📤 서버로 보내는 대여 데이터:", {
+      setModalType(null);
+    } 
+    // 2️⃣ [대여]
+    else if (pendingActionData?.type === 'rent') {
+      const paymentMethod = pendingActionData.paymentMethod;
+      const totalCost = pendingActionData.totalRequiredPoints;
+      const targetBook = pendingActionData.targetBook;
+
+      const rentalResponse = await fetch(`${serverUrl}/api/rentals`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '69420'
+        },
+        body: JSON.stringify({
           bookId: targetBook.id,
-          userId: currentUser.name, // 서버가 request.get("userId")로 받으므로 키를 userId로 맞춤!
-          userName: currentUser.name, // 혹시 몰라 userName도 같이 동봉
-        });
+          userId: currentUser.name,
+          userName: currentUser.name,
+          paymentMethod: paymentMethod,
+          rentalHours: pendingActionData.rentalType?.hours ?? 1,
+          totalPoints: totalCost,
+          auth_code_1: pendingActionData.auth_code_1,
+        }),
+      });
 
-        const response = await fetch(`${serverUrl}/api/rentals`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420'
-           },
-          body: JSON.stringify({
-            bookId: targetBook.id,
-            userId: currentUser.name,   // 👈 서버 캡처 코드의 request.get("userId")와 일치시킴
-            userName: currentUser.name, // 👈 혹시 서버가 나중에 바꿀 것을 대비해 같이 전송
-            paymentMethod: paymentMethod,
-            rentalHours: rentalType.hours,
-            totalPoints: totalCost,
-          }),
-        });
+      const resText = await rentalResponse.text();
+      let resData: any = {};
+      try { resData = resText ? JSON.parse(resText) : {}; } catch (e) {}
 
-    // 2. 서버 응답 에러 검사
-        if (!response.ok) {
-          const errText = await response.text();
-          console.log("❌ 서버가 거절한 이유 (응답 텍스트):", errText); // 이 줄을 추가!
-          throw new Error(errText || '서버 대여 처리에 실패했습니다.');
-        }
-
-    if (paymentMethod === 'points') {
-      setUserPoints((prev) => prev - totalCost);
-    } else {
-      setRentalCoupons((prev) => prev.slice(1));
-    }
-        
-        const maxExt = rentalType.hours === 24 ? 0 : 2;
-        const initialSeconds = rentalType.hours * 3600;
-        setBooks((prevBooks) =>
-          prevBooks.map((b) =>
-            b.id === targetBook.id
-              ? {
-                  ...b,
-                  status: '대여 중',
-                  borrower: currentUser.name,
-                  extensionCount: 0,
-                  maxExtensions: maxExt,
-                  initialHours: rentalType.hours,
-                  rentalTimeLeft: initialSeconds,
-                }
-              : b
-          )
-        );
-        setLimitSwitches((prev) => ({
-          ...prev,
-          [`${targetBook.storageNo}-${targetBook.lockerNo}`]: false,
-        }));
-        Alert.alert('대여 완료', `[${rentalType.name} 대여 시작]\n도어락이 열렸습니다.`);
-      } catch (error) {
-        Alert.alert('오류', '대여 통신 중 문제가 발생했습니다.');
+      if (!rentalResponse.ok || (resData.success === false)) {
+        Alert.alert('대여 실패', resData.message || '서버에서 대여를 거절했습니다.');
+        setModalType(null);
+        return;
       }
-    } else if (pendingActionData.type === 'return') {
+
+      if (resData.updatedPoints !== undefined) {
+        setUserPoints(resData.updatedPoints);
+      } else if (paymentMethod === 'points') {
+        setUserPoints((prev) => prev - totalCost);
+      } else {
+        setRentalCoupons((prev) => prev.slice(1));
+      }
+
+      setUserStamps((prevStamps) => {
+        const nextStamps = prevStamps + 1;
+        if (nextStamps >= 10) {
+          const newCoupon = {
+            id: Date.now().toString(),
+            name: '스탬프 10개 달성 무료 도서 대여 쿠폰',
+            date: `${new Date().getFullYear()}.${String(new Date().getMonth() + 1).padStart(2, '0')}.${String(new Date().getDate()).padStart(2, '0')} 획득`
+          };
+          setRentalCoupons((couponPrev) => [newCoupon, ...couponPrev]);
+          Alert.alert('스탬프 10개 달성!', '스탬프 10개가 모여 [무료 도서 대여 쿠폰]이 발급되었습니다!');
+          return 0;
+        }
+        return nextStamps;
+      });
+
+      const maxExt = pendingActionData.rentalType.hours === 24 ? 0 : 2;
+      const initialSeconds = pendingActionData.rentalType.hours * 3600;
+
+      setBooks((prevBooks) =>
+        prevBooks.map((b) =>
+          b.id === targetBook.id
+            ? {
+                ...b,
+                status: '대여 중',
+                borrower: currentUser.name,
+                extensionCount: 0,
+                maxExtensions: maxExt,
+                initialHours: pendingActionData.rentalType.hours,
+                rentalTimeLeft: initialSeconds,
+              }
+            : b
+        )
+      );
+
+      setLimitSwitches((prev) => ({
+        ...prev,
+        [`${targetBook.storageNo}-${targetBook.lockerNo}`]: false,
+      }));
+
+      Alert.alert('대여 완료', `[${pendingActionData.rentalType.name} 대여 시작]\n도어락이 열렸습니다.`);
+      setModalType(null);
+    } 
+    // 3️⃣ [반납]
+    else if (pendingActionData?.type === 'return') {
       const { bookId, storageNo, lockerNo } = pendingActionData;
+      await fetch(`${serverUrl}/api/returns`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '69420'
+        },
+        body: JSON.stringify({ bookId: bookId })
+      });
 
-      try {
-        // 서버 DB에도 반납 상태를 영구적으로 반영하기 위한 통신 추가
-        const response = await fetch(`${serverUrl}/api/returns`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json',
-            'ngrok-skip-browser-warning': '69420'
-           },
-          body: JSON.stringify({
-            bookId: bookId,
-            userName: currentUser.name,
-          }),
-        });
-
-        if (!response.ok) {
-          const errText = await response.text();
-          console.log("서버 반납 거절 이유:", errText);
-        }
-      } catch (error) {
-        console.error('반납 통신 에러:', error);
-      }
-
-      setBooks(
-        books.map((b) => (b.id === bookId ? { ...b, status: '대여 가능', borrower: '', extensionCount: 0, rentalTimeLeft: 0 } : b))
+      setBooks((prevBooks) =>
+        prevBooks.map((b) => (b.id === bookId ? { ...b, status: '대여 가능', borrower: "", extensionCount: 0, rentalTimeLeft: 0 } : b))
       );
       setLimitSwitches((prev) => ({
         ...prev,
         [`${storageNo}-${lockerNo}`]: true,
       }));
-      Alert.alert('반납 완료', '지정 구역에 반납이 완료되었습니다.');
-    } else if (pendingActionData.type === 'retrieve') {
-      const target = pendingActionData.targetBook;
-      try {
-        await fetch(`${serverUrl}/api/books/${target.id}`, { method: 'DELETE' });
-        setBooks(books.filter((b) => b.id !== target.id));
-        setLimitSwitches((prev) => ({
-          ...prev,
-          [`${target.storageNo}-${target.lockerNo}`]: false,
-        }));
-        Alert.alert('회수 완료', '보관함에서 책을 꺼내주세요.');
-      } catch (error) {
-        Alert.alert('오류', '회수 통신 중 문제가 발생했습니다.');
+      Alert.alert('반납 완료', '지정된 보관함에 반납이 완료되었습니다.');
+      setModalType(null);
+    } 
+    // 4️⃣ [회수]
+    else if (pendingActionData?.type === 'retrieve') {
+      const target = pendingActionData.targetBook || books.find((b) => b.id === pendingActionData.bookId);
+      if (!target) {
+        setModalType(null);
+        return;
       }
-    }
-    setModalType(null);
-  };
+      await fetch(`${serverUrl}/api/books/${target.id}`, {
+        method: 'DELETE',
+        headers: { 'ngrok-skip-browser-warning': '69420' }
+      });
 
-  const handleApplyReferral = () => {
-    if (!inputReferralCode) {
-      Alert.alert('오류', '추천 코드를 입력해주세요.');
-      return;
+      setBooks((prevBooks) => prevBooks.filter((b) => b.id !== target.id));
+      setLimitSwitches((prev) => ({
+        ...prev,
+        [`${target.storageNo}-${target.lockerNo}`]: false,
+      }));
+      Alert.alert('회수 완료', '보관함에서 책을 완전히 회수하였습니다.');
+      setModalType(null);
     }
-    setRentalCoupons((prev) => [
-      { id: Date.now().toString(), name: '친구 추천 보상 대여 쿠폰', date: '방금 전 지급' },
-      ...prev,
-    ]);
-    setUserPoints(userPoints + 100);
-    Alert.alert('보상 지급 완료', '양방향 추천 보상으로 +100P와 도서 대여 쿠폰 1장이 지급되었습니다!');
-    setInputReferralCode('');
-    setModalType(null);
-  };
+
+  } catch (error) {
+    console.error('인증 통신 에러:', error);
+    Alert.alert('오류', '통신 중 문제가 발생했습니다.');
+  }
+};
+
+  const handleApplyReferral = async () => {
+  // 1. 이미 요청 중이거나(연타 방지), 3회를 다 채웠으면 실행 차단
+  if (isLoading) return;
+  if (referralCount >= 3) {
+    Alert.alert('제한 초과', '추천 코드는 최대 3회까지만 등록할 수 있습니다.');
+    return;
+  }
+
+  if (!inputReferralCode) {
+    Alert.alert('오류', '추천 코드를 입력해주세요.');
+    return;
+  }
+  
+  // 본인 코드를 입력하는 것 방지
+  if (inputReferralCode === myReferralCode) {
+    Alert.alert('오류', '자신의 추천 코드는 입력할 수 없습니다.');
+    return;
+  }
+
+  setIsLoading(true); // 통신 시작과 동시에 버튼 잠금 (연타 방지)
+
+  try {
+    const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+    const response = await fetch(`${serverUrl}/api/referral`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420'
+      },
+      body: JSON.stringify({
+        studentId: currentUser.studentId,    // 내 학번
+        referralCode: inputReferralCode      // 내가 입력한 친구의 추천 코드
+      })
+    });
+
+    // 서버가 빈 응답(ok.build 등)을 줄 때의 에러를 방지하기 위한 안전한 파싱
+    const textData = await response.text();
+    const data = textData ? JSON.parse(textData) : {};
+
+    if (response.ok) {
+      setReferralCount((prev) => prev + 1); // 성공 시 등록 횟수 1 증가
+      setUserPoints((prev) => prev + 100);
+      
+      Alert.alert('보상 지급 완료', '추천 코드가 정상 등록되어 100 포인트가 지급되었습니다!');
+      setInputReferralCode('');
+      setModalType(null);
+    } else {
+      Alert.alert('등록 실패', data.message || '존재하지 않거나 잘못된 추천 코드입니다.');
+    }
+  } catch (error) {
+    console.error('추천 코드 통신 에러:', error);
+    Alert.alert('오류', '서버 통신 중 문제가 발생했습니다.');
+  } finally {
+    setIsLoading(false); // 통신이 끝나면 버튼 잠금 해제
+  }
+};
 
   const handleExtendRental = (bookId: string) => {
     setBooks((prevBooks) =>
@@ -896,7 +1237,7 @@ try {
     );
   };
 
-  // 현재 로그인한 사용자가 '책 주인(owner)'이면서 + 신고(reports) 내역이 존재하는 도서만 필터링
+  // 현재 로그인한 사용자가 '책 주인(owner)'이면서 신고(reports) 내역이 존재하는 도서만 필터링
 const booksWithReports = books.filter(
   (b) => b.owner === currentUser.name && b.reports && b.reports.length > 0
 );
@@ -1028,6 +1369,26 @@ const booksWithReports = books.filter(
                       <View key={rep.id} style={{ marginTop: 6, borderTopWidth: 1, borderTopColor: '#334155', paddingTop: 6 }}>
                         <Text style={{ color: '#cbd5e1', fontSize: 11 }}>접수일시: {rep.date} / 신고자: {rep.reporter}</Text>
                         <Text style={{ color: '#f8fafc', fontSize: 12, marginTop: 2 }}>내용: {rep.detail}</Text>
+                        {/* 👇 신고된 이미지(들)를 주인 화면에 미리보기로 표시 */}
+{/* 👇 신고된 다중 이미지들을 주인 화면에 가로 스크롤로 모두 표시 */}
+{rep.images && rep.images.length > 0 ? (
+  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: 6, marginBottom: 6 }}>
+    <View style={{ flexDirection: 'row', gap: 6 }}>
+      {rep.images.map((imgUri: string, imgIdx: number) => (
+  <TouchableOpacity 
+    key={imgIdx} 
+    onPress={() => setSelectedPreviewImage(imgUri)} // 해당 사진 터치하면 확대됨
+  >
+    <Image
+      source={{ uri: imgUri }}
+      style={{ width: 60, height: 60, borderRadius: 6, backgroundColor: '#334155' }}
+      resizeMode="cover"
+    />
+  </TouchableOpacity>
+))}
+    </View>
+  </ScrollView>
+) : null}
                         {inputingPinForBookId === book.id && inputingReportId === rep.id ? (
                           <View style={{ marginTop: 8, backgroundColor: '#1e293b', padding: 8, borderRadius: 6 }}>
                             <Text style={{ color: '#38bdf8', fontSize: 11, marginBottom: 4 }}>책 주인의 고유 비밀번호(4자리) 입력 후 판별</Text>
@@ -1285,13 +1646,13 @@ const booksWithReports = books.filter(
                 <Text style={styles.modalDesc}>포인트로 변환하여 획득한 혜택 쿠폰 목록입니다.</Text>
                 {exchangedGifticons.length > 0 ? (
                   <View style={{ gap: 8 }}>
-                    {exchangedGifticons.map((item) => (
-                      <View key={item.id} style={[styles.ticketCard, { borderColor: '#38bdf8', borderWidth: 1 }]}>
-                        <Text style={{ color: '#38bdf8', fontSize: 13, fontWeight: 'bold' }}>{item.name}</Text>
-                        <Text style={{ color: '#94a3b8', fontSize: 11, marginTop: 4 }}>{item.date}</Text>
-                        <Text style={{ color: '#34d399', fontSize: 10, marginTop: 4 }}>* 제휴처 매장 직원에게 제시 후 사용하세요.</Text>
-                      </View>
-                    ))}
+                    {exchangedGifticons.map((item, index) => (
+  <View key={item.id ? String(item.id) : `gifticon_${index}`} style={[styles.ticketCard, { borderColor: '#38bdf8', borderWidth: 1 }]}>
+    <Text style={{ color: '#38bdf8', fontSize: 13, fontWeight: 'bold' }}>{item.name}</Text>
+    <Text style={{ color: '#94a3b8', fontSize: 11, marginTop: 4 }}>{item.date}</Text>
+    <Text style={{ color: '#34d399', fontSize: 10, marginTop: 4 }}>* 제휴처 매장 직원에게 제시 후 사용하세요.</Text>
+  </View>
+))}
                   </View>
                 ) : (
                   <Text style={{ color: '#94a3b8', textAlign: 'center', marginVertical: 30 }}>보유 중인 기프트콘 혜택 쿠폰이 없습니다.</Text>
@@ -1348,20 +1709,43 @@ const booksWithReports = books.filter(
                     />
                     <Text style={{ color: '#cbd5e1', fontSize: 12, marginBottom: 6 }}>대여 가능한 도서 목록</Text>
                     {filteredAvailableBooks.map((b) => {
-                      const p1h = calculateRequiredPoints(1, b.condition);
-                      const p2h = calculateRequiredPoints(2, b.condition);
-                      const pFull = calculateRequiredPoints(24, b.condition);
-                      return (
-                        <TouchableOpacity key={b.id} style={styles.modalBookItem} onPress={() => handleSelectBookItem(b)}>
-                          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>{b.title}</Text>
-                            <Text style={{ color: '#38bdf8', fontWeight: 'bold', fontSize: 12, backgroundColor: '#0f172a', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>{b.condition}</Text>
-                          </View>
-                          <Text style={{ color: '#94a3b8', fontSize: 11, marginTop: 4 }}>{b.storageNo} {b.lockerNo} (주인: {b.owner} / 저자: {b.author})</Text>
-                          <Text style={{ color: '#34d399', fontSize: 10, marginTop: 4 }}>[차감] 1시간: {p1h}P | 2시간: {p2h}P | 종일권: {pFull}P</Text>
-                        </TouchableOpacity>
-                      );
-                    })}
+  const plh = calculateRequiredPoints(1, b.condition);
+  const p2h = calculateRequiredPoints(2, b.condition);
+  const pFull = calculateRequiredPoints(24, b.condition);
+  
+  // 이미지 배열 안전하게 파싱
+  const bookImgs = Array.isArray(b.images) ? b.images : (b.image ? [b.image] : []);
+
+  return (
+    <View key={b.id} style={[styles.modalBookItem, { flexDirection: 'row', gap: 12, alignItems: 'center' }]}>
+      {/* 대표 사진 1장만 목록에 노출하고, 터치 시 전체 사진 배열을 모달로 전달 */}
+{bookImgs.length > 0 ? (
+  <TouchableOpacity
+    onPress={(e) => {
+      e.stopPropagation?.();
+      setSelectedPreviewImage(bookImgs); // <-- 터치하면 전체 사진 배열이 모달로 전달됨!
+    }}
+  >
+    <Image 
+      source={{ uri: bookImgs[0] }} 
+      style={{ width: 60, height: 60, borderRadius: 6, backgroundColor: '#334155' }} 
+      resizeMode="cover" 
+    />
+  </TouchableOpacity>
+) : null}
+
+      {/* 텍스트 영역 터치 시에만 대여 상세(2단계)로 이동 */}
+      <TouchableOpacity style={{ flex: 1 }} onPress={() => handleSelectBookItem(b)}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>{b.title}</Text>
+          <Text style={{ color: '#38bdf8', fontWeight: 'bold', fontSize: 12, backgroundColor: '#0f172a', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>{b.condition}</Text>
+        </View>
+        <Text style={{ color: '#94a3b8', fontSize: 11, marginTop: 4 }}>{b.storageNo} {b.lockerNo} (주인: {b.owner})</Text>
+        <Text style={{ color: '#34d399', fontSize: 10, marginTop: 4 }}>[차감] 1시간: {plh}P | 2시간: {p2h}P | 종일권: {pFull}P</Text>
+      </TouchableOpacity>
+    </View>
+  );
+})}
                     {filteredAvailableBooks.length === 0 && (
                       <Text style={{ color: '#94a3b8', textAlign: 'center', marginVertical: 20 }}>대여 가능한 도서가 없습니다.</Text>
                     )}
@@ -1491,13 +1875,39 @@ const booksWithReports = books.filter(
         );
       })}
     </View>
-    <Text style={{ color: '#cbd5e1', fontSize: 12, marginBottom: 6, marginTop: 10 }}>도서 실물 사진 등록</Text>
-    <View style={styles.imagePickerRow}>
-      <Image source={{ uri: bookImageUri }} style={styles.previewImage} />
-      <TouchableOpacity style={styles.imagePickBtn} onPress={handlePickSampleImage}>
-        <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>사진 촬영/가져오기</Text>
-      </TouchableOpacity>
-    </View>
+    <Text style={{ color: '#cbd5e1', fontSize: 12, marginBottom: 6, marginTop: 10 }}>
+  도서 실물 사진 다중 첨부 ({bookImageUris.length}장)
+</Text>
+<ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
+  <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+    {/* 사진 추가 버튼 */}
+    <TouchableOpacity
+      style={[styles.imagePickBtn, { width: 80, height: 80, justifyContent: 'center', alignItems: 'center' }]}
+      onPress={handlePickBookImages}
+    >
+      <Text style={{ color: '#fff', fontSize: 24 }}>+</Text>
+      <Text style={{ color: '#fff', fontSize: 10, marginTop: 4 }}>사진 추가</Text>
+    </TouchableOpacity>
+    
+    {/* 선택된 이미지 미리보기 및 개별 삭제 버튼 */}
+    {bookImageUris.map((uri, index) => (
+      <View key={index} style={{ position: 'relative' }}>
+        <Image source={{ uri: uri }} style={{ width: 80, height: 80, borderRadius: 6, backgroundColor: '#334155' }} />
+        <TouchableOpacity
+          style={{
+            position: 'absolute', top: 4, right: 4,
+            backgroundColor: 'rgba(0,0,0,0.7)', width: 20, height: 20, borderRadius: 10,
+            justifyContent: 'center', alignItems: 'center',
+          }}
+          onPress={() => setBookImageUris((prev) => prev.filter((_, i) => i !== index))}
+        >
+          <Text style={{ color: '#fff', fontSize: 10, fontWeight: 'bold' }}>X</Text>
+        </TouchableOpacity>
+      </View>
+    ))}
+  </View>
+</ScrollView>
+
     <Text style={{ color: '#cbd5e1', fontSize: 12, marginBottom: 6 }}>도서 등급</Text>
     <View style={{ flexDirection: 'row', gap: 6, marginBottom: 12 }}>
       {['S급', 'A급', 'B급', 'C급'].map((cond) => (
@@ -1567,13 +1977,47 @@ const booksWithReports = books.filter(
                     </TouchableOpacity>
                   ))}
                 </View>
-                <Text style={{ color: '#cbd5e1', fontSize: 12, marginBottom: 6 }}>파손/분실 부위 사진 첨부</Text>
-                <View style={styles.imagePickerRow}>
-                  <Image source={{ uri: reportImageUri }} style={styles.previewImage} />
-                  <TouchableOpacity style={styles.imagePickBtn} onPress={handlePickReportImage}>
-                    <Text style={{ color: '#fff', fontSize: 12, fontWeight: 'bold' }}>사진 첨부하기</Text>
-                  </TouchableOpacity>
-                </View>
+                <Text style={{ color: '#cbd5e1', fontSize: 12, marginBottom: 6 }}>
+  파손/분실 부위 사진 첨부 ({reportImageUris.length}장)
+</Text>
+
+<ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
+  <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+    {/* 사진 추가 버튼 */}
+    <TouchableOpacity
+      style={[styles.imagePickBtn, { width: 80, height: 80, justifyContent: 'center', alignItems: 'center' }]}
+      onPress={handlePickReportImage}
+    >
+      <Text style={{ color: '#fff', fontSize: 24 }}>+</Text>
+      <Text style={{ color: '#fff', fontSize: 10, marginTop: 4 }}>사진 추가</Text>
+    </TouchableOpacity>
+
+    {/* 선택된 다중 이미지 미리보기 목록 및 개별 삭제(X) 버튼 */}
+    {reportImageUris.map((uri, index) => (
+      <View key={index} style={{ position: 'relative' }}>
+        <Image source={{ uri: uri }} style={{ width: 80, height: 80, borderRadius: 6, backgroundColor: '#334155' }} />
+        <TouchableOpacity
+          style={{
+            position: 'absolute',
+            top: 4,
+            right: 4,
+            backgroundColor: 'rgba(0,0,0,0.7)',
+            width: 20,
+            height: 20,
+            borderRadius: 10,
+            justifyContent: 'center',
+            alignItems: 'center',
+          }}
+          onPress={() => {
+            setReportImageUris((prev) => prev.filter((_, i) => i !== index));
+          }}
+        >
+          <Text style={{ color: '#fff', fontSize: 10, fontWeight: 'bold' }}>✕</Text>
+        </TouchableOpacity>
+      </View>
+    ))}
+  </View>
+</ScrollView>
                 <Text style={{ color: '#cbd5e1', fontSize: 12, marginBottom: 6 }}>상세 내용 입력</Text>
                 <TextInput
                   style={[styles.input, { height: 80, textAlignVertical: 'top' }]}
@@ -1590,37 +2034,25 @@ const booksWithReports = books.filter(
             )}
 
             {modalType === 'pinAuth' && (
-              <View style={{ alignItems: 'center', paddingVertical: 10 }}>
-                <Text style={styles.modalTitle}>2단계 시퀀셜 보안 인증</Text>
-                <View style={styles.bigHighlightBanner}>
-                  <Text style={styles.bigHighlightLabel}>최종 배정 구역</Text>
-                  <Text style={styles.bigHighlightText}>{highlightZone}</Text>
-                </View>
-                {authStep === 'step1_keypad' ? (
-                  <View style={styles.pinContainer}>
-                    <Text style={{ color: '#38bdf8', fontSize: 11, fontWeight: 'bold' }}>[1단계: 키패드 임시 인증번호]</Text>
-                    <Text style={styles.pinText}>{step1Pin}</Text>
-                    <TouchableOpacity style={[styles.submitBtn, { width: '100%', backgroundColor: '#0284c7', marginTop: 12, marginBottom: 0 }]} onPress={handleStep1KeypadSuccess}>
-                      <Text style={styles.submitBtnText}>키패드 입력 완료 (사용자 판별)</Text>
-                    </TouchableOpacity>
-                  </View>
-                ) : (
-                  <View style={styles.pinContainer}>
-                    <Text style={{ color: '#34d399', fontSize: 11, fontWeight: 'bold' }}>[2단계: 최종 보안 비밀번호]</Text>
-                    <Text style={styles.pinText}>{step2Pin}</Text>
-                    <TouchableOpacity style={[styles.submitBtn, { width: '100%', backgroundColor: '#059669', marginTop: 12, marginBottom: 0 }]} onPress={handleFinalDoorOpenConfirm}>
-                      <Text style={styles.submitBtnText}>도어락 열림 확인 완료</Text>
-                    </TouchableOpacity>
-                  </View>
-                )}
-                <View style={styles.timerBox}>
-                  <Text style={styles.timerLabel}>남은 인증 시간 (1분 제한)</Text>
-                  <Text style={styles.timerValue}>
-                    {Math.floor(timeLeft / 60)}분 {timeLeft % 60 < 10 ? `0${timeLeft % 60}` : timeLeft % 60}초
-                  </Text>
-                </View>
-              </View>
-            )}
+  <View style={{ alignItems: 'center', paddingVertical: 10 }}>
+    <Text style={styles.modalTitle}>보안 키패드 인증</Text>
+    <View style={styles.bigHighlightBanner}>
+      <Text style={styles.bigHighlightLabel}>최종 배정 구역</Text>
+      <Text style={styles.bigHighlightText}>{highlightZone}</Text>
+    </View>
+
+    <View style={styles.pinContainer}>
+      <Text style={{ color: '#38bdf8', fontSize: 11, fontWeight: 'bold' }}>[임시 인증번호]</Text>
+      <Text style={styles.pinText}>{step1Pin}</Text>
+      <TouchableOpacity 
+        style={[styles.submitBtn, { width: '100%', backgroundColor: '#0284c7', marginTop: 12, marginBottom: 0 }]}
+        onPress={handleStep1KeypadSuccess}
+      >
+        <Text style={styles.submitBtnText}>키패드 입력 완료 (인증 확인)</Text>
+      </TouchableOpacity>
+    </View>
+  </View>
+)}
 
             {modalType === 'referral' && (
               <View>
@@ -1638,21 +2070,64 @@ const booksWithReports = books.filter(
                   value={inputReferralCode}
                   onChangeText={setInputReferralCode}
                 />
-                <TouchableOpacity style={styles.submitBtn} onPress={handleApplyReferral}>
-                  <Text style={styles.submitBtnText}>추천 코드 등록하고 보상 받기</Text>
-                </TouchableOpacity>
-              </View>
-            )}
+                <TouchableOpacity
+      style={[
+        styles.submitBtn, 
+        (isLoading || referralCount >= 3) && { backgroundColor: '#475569' } // 다 쓰거나 로딩 중이면 회색 처리
+      ]}
+      onPress={handleApplyReferral}
+      disabled={isLoading || referralCount >= 3} // 연타 및 3회 초과 시 터치 차단
+    >
+      <Text style={styles.submitBtnText}>
+        {referralCount >= 3 ? "등록 횟수 완료 (3/3)" : isLoading ? "처리 중..." : "추천 코드 등록하고 보상 받기"}
+      </Text>
+    </TouchableOpacity>
+  </View>
+)}
 
             <TouchableOpacity style={styles.closeBtn} onPress={() => setModalType(null)}>
               <Text style={{ color: '#94a3b8', fontWeight: 'bold' }}>닫기</Text>
             </TouchableOpacity>
           </View>
         </View>
+
+        {selectedPreviewImage !== null && (
+      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.95)', justifyContent: 'center', alignItems: 'center', zIndex: 99999 }}>
+        <TouchableOpacity
+          style={{ position: 'absolute', top: 50, right: 20, zIndex: 10, padding: 10, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8 }}
+          onPress={() => setSelectedPreviewImage(null)}
+        >
+          <Text style={{ color: '#fff', fontSize: 14, fontWeight: 'bold' }}>닫기</Text>
+        </TouchableOpacity>
+
+        {/* ✨ 여러 장의 사진을 가로로 넘겨볼 수 있는 스크롤 뷰 */}
+    <ScrollView 
+      horizontal 
+      pagingEnabled 
+      showsHorizontalScrollIndicator={true}
+      contentContainerStyle={{ alignItems: 'center', justifyContent: 'center' }}
+      style={{ width: '100%', height: '80%' }}
+    >
+      {/* 만약 selectedPreviewImage가 배열이거나 단일 문자열일 때 모두 대응 */}
+      {(Array.isArray(selectedPreviewImage) ? selectedPreviewImage : [selectedPreviewImage]).map((uri, idx) => (
+        <View key={idx} style={{ width: 350, height: '100%', justifyContent: 'center', alignItems: 'center' }}>
+          <Image
+            source={{ uri }}
+            style={{ width: '90%', height: '100%', resizeMode: 'contain' }}
+          />
+        </View>
+      ))}
+    </ScrollView>
+  </View>
+)}
+
       </Modal>
+    
+
     </SafeAreaView>
   );
 }
+
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0f172a' },
