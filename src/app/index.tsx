@@ -214,12 +214,10 @@ initialHours: (item.rentalHours === 24 || calculatedLeft > 10800) ? 24 : (item.i
   try {
     const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
     const response = await fetch(`${serverUrl}/api/sensors/logs`, {
-      method: 'POST',
+      method: 'GET',
       headers: { 
-        'Content-Type': 'application/json',
         'ngrok-skip-browser-warning': '69420' 
-      },
-      body: JSON.stringify({})
+      }
     });
     
     if (!response.ok) return;
@@ -227,35 +225,78 @@ initialHours: (item.rentalHours === 24 || calculatedLeft > 10800) ? 24 : (item.i
     const sensorLogs = await response.json();
     console.log("📦 서버에서 받아온 센서 로그:", sensorLogs);
 
-    // ★ [핵심] 배열이든 단일 객체이든 모두 배열로 감싸서 안전하게 처리
     const logsArray = Array.isArray(sensorLogs) ? sensorLogs : [sensorLogs];
 
+    // 1. 서버 DB가 비어있거나 데이터가 없다면 모든 구역을 '빈자리(false)'로 초기화
+    if (logsArray.length === 0 || (logsArray.length === 1 && !logsArray[0].cabinet_slot && !logsArray[0].storageNo)) {
+      setLimitSwitches({
+        '제1보관함 (전공서적)-1구역': false,
+        '제1보관함 (전공서적)-2구역': false,
+        '제1보관함 (전공서적)-3구역': false,
+        '제1보관함 (전공서적)-4구역': false,
+        '제1보관함 (전공서적)-5구역': false,
+        '제2보관함 (자격증서적)-1구역': false,
+        '제2보관함 (자격증서적)-2구역': false,
+        '제2보관함 (자격증서적)-3구역': false,
+        '제2보관함 (자격증서적)-4구역': false,
+        '제2보관함 (자격증서적)-5구역': false,
+      });
+      return;
+    }
+
     const updatedSwitches = { ...limitSwitches };
+
+    // 2. DB에서 가져온 로그들을 순회하며 각 구역 상태 업데이트
     logsArray.forEach((log: any) => {
       if (!log) return;
-      const storage = log.storageNo || '제1보관함 (전공서적)';
-      const locker = log.lockerNo || '1구역';
-      const key = `${storage}-${locker}`;
+
+      // DB 컬럼명인 cabinet_slot, locker_no, limit_switch_status 기준 매칭
+      let storageName = '제1보관함 (전공서적)';
+      const slot = log.cabinet_slot || log.cabinetSlot;
+      if (slot === 2) {
+        storageName = '제2보관함 (자격증서적)';
+      } else if (log.storageNo) {
+        storageName = log.storageNo;
+      }
+
+      // DB의 locker_no (예: "1구역" 또는 숫자 형태 등 보완)
+      let locker = log.locker_no || log.lockerNo || '1구역';
+      if (!locker.includes('구역')) {
+        locker = `${locker}구역`;
+      }
+
+      const key = `${storageName}-${locker}`;
       
-      if (log.isOccupied !== undefined) {
-        updatedSwitches[key] = log.isOccupied;
-      } else if (log.status !== undefined) {
-        updatedSwitches[key] = log.status;
-      } else if (log.limitSwitchStatus !== undefined) {
-        updatedSwitches[key] = log.limitSwitchStatus;
+      const rawOccupied = log.limit_switch_status !== undefined 
+        ? log.limit_switch_status 
+        : (log.limitSwitchStatus !== undefined 
+            ? log.limitSwitchStatus 
+            : (log.isOccupied !== undefined ? log.isOccupied : log.status));
+
+      if (rawOccupied !== undefined) {
+        updatedSwitches[key] = (rawOccupied === 1 || rawOccupied === true || rawOccupied === "1");
       }
     });
+
     setLimitSwitches(updatedSwitches);
 
   } catch (error) {
-    console.error(" 리미트 스위치 통신 에러:", error);
+    console.error("❌ 리미트 스위치 통신 에러:", error);
   }
 };
-  // useEffect는 선언된 fetchBooks 함수를 호출만 하도록 짧게 변경
   useEffect(() => {
-    fetchBooks();
+  if (!isLoggedIn) return;
+
+  fetchBooks();
+  fetchLimitSwitches();
+
+  // 3초마다 자동으로 센서 상태를 불러와 실시간 반영
+  const interval = setInterval(() => {
     fetchLimitSwitches();
-  }, [isLoggedIn]);
+  }, 3000);
+
+  return () => clearInterval(interval);
+}, [isLoggedIn]);
 
   // 신규 책 등록 폼 상태
   const [newTitle, setNewTitle] = useState('');
@@ -921,46 +962,90 @@ const initiateRegisterProcess = async () => {
 
   // 1단계 인증 코드 생성
   const pin1 = generateRandomPin();
-
   setStep1Pin(pin1);
 
+  const bookData = {
+    title: newTitle,
+    author: newAuthor,
+    storageNo: selectedStorage,
+    lockerNo: emptyZone,
+    publisher: newPublisher || '기타출판사',
+    condition: selectedCondition,
+    owner: currentUser.name,
+    ownerPin: currentUser.pin,
+    auth_code_1: pin1,
+    images: bookImageUris
+  };
+
+  try {
+    const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+    const formData = new FormData();
+    
+    formData.append('title', bookData.title);
+    formData.append('author', bookData.author);
+    formData.append('publisher', bookData.publisher);
+    formData.append('condition', bookData.condition);
+    formData.append('storageNo', bookData.storageNo);
+    formData.append('lockerNo', bookData.lockerNo);
+    formData.append('owner', bookData.owner);
+    formData.append('ownerPin', bookData.ownerPin);
+    formData.append('auth_code_1', bookData.auth_code_1);
+
+    if (bookData.images && bookData.images.length > 0) {
+      for (const [index, uri] of bookData.images.entries()) {
+        const filename = uri.split('/').pop() || `book_${index}.jpg`;
+        const match = /\.(\w+)$/.exec(filename);
+        const type = match ? `image/${match[1]}` : `image/jpeg`;
+        const imgResponse = await fetch(uri);
+        const blob = await imgResponse.blob();
+        formData.append('images', blob, filename);
+      }
+    }
+
+    console.log("📦 [사전 등록] 서버로 도서 사전 등록 요청 전송...");
+    const registerResponse = await fetch(`${serverUrl}/api/books`, {
+      method: 'POST',
+      headers: { 'ngrok-skip-browser-warning': '69420' },
+      body: formData,
+    });
+
+    if (!registerResponse.ok) {
+      throw new Error('서버 도서 사전 등록 실패');
+    }
+
+    // 서버 사전 등록 성공 시에만 pendingActionData 세팅 및 키패드 모달 오픈
     setPendingActionData({
       type: 'register',
-      bookData: {
-        title: newTitle,
-        author: newAuthor,
-        storageNo: selectedStorage,
-        lockerNo: emptyZone,
-        publisher: newPublisher || '기타출판사',
-        condition: selectedCondition,
-        owner: currentUser.name,
-        ownerPin: currentUser.pin,
-        auth_code_1: pin1,
-        images: bookImageUris
-      }
+      bookData: bookData
     });
 
     setActiveLockerInfo('자동 배정된 보관 구역');
     setHighlightZone(`${selectedStorage}\n${emptyZone}`);
     setModalType('pinAuth');
 
+  } catch (error) {
+    console.error('도서 사전 등록 통신 에러:', error);
+    Alert.alert('오류', '도서 사전 등록 중 문제가 발생했습니다.');
+  }
 };
 
 const handleStep1KeypadSuccess = async () => {
   try {
     const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
-    const currentLockerNo = pendingActionData?.targetBook?.lockerNo || pendingActionData?.lockerNo || '1구역';
+    
+    // ★ [수정] targetBook 또는 bookData 중 존재하는 객체에서 안전하게 꺼냄
+    const targetData = pendingActionData?.targetBook || pendingActionData?.bookData || {};
+    const currentLockerNo = targetData.lockerNo || pendingActionData?.lockerNo || '1구역';
+    const currentStorageNo = targetData.storageNo || '제 1보관함 (전공서적)';
     const slotInt = parseInt(String(currentLockerNo).replace(/[^0-9]/g, '')) || 1;
 
     // ★ 작업 종류(type)에 따라 올바른 API 주소 선택
-    // - 대여(rent), 반납(return) -> /api/app/verify-rental-step1
-    // - 보관(register), 회수(retrieve) -> /api/app/verify-storage-step1
     const isRentalOrReturn = pendingActionData?.type === 'rent' || pendingActionData?.type === 'return';
     const verifyEndpoint = isRentalOrReturn 
       ? '/api/app/verify-rental-step1' 
       : '/api/app/verify-storage-step1';
 
-    console.log(`🔍 [1단계 검증] ${verifyEndpoint} 요청 - 수납장:`, slotInt);
+    console.log(`🔍 [1단계 검증] ${verifyEndpoint} 요청 - 보관함: ${currentStorageNo} / 수납장:`, slotInt);
 
     const response = await fetch(`${serverUrl}${verifyEndpoint}`, {
       method: 'POST',
@@ -969,7 +1054,8 @@ const handleStep1KeypadSuccess = async () => {
         'ngrok-skip-browser-warning': '69420'
       },
       body: JSON.stringify({
-        cabinetSlot: slotInt,
+        cabinetSlot: currentStorageNo,          
+        storageNo: currentStorageNo,   
         authCode: step1Pin,
         auth_code_1: step1Pin
       }),
@@ -978,49 +1064,18 @@ const handleStep1KeypadSuccess = async () => {
     const data = await response.json();
     console.log("서버 인증 상태 응답:", data);
 
-    if (!response.ok || data.open !== true) {
+    // open과 success 키값 모두 지원하도록 처리
+    const isSuccess = data.open === true || data.success === true;
+
+    if (!response.ok || !isSuccess) {
       Alert.alert('인증 실패', '키패드 비밀번호가 일치하지 않습니다. 다시 확인해주세요!');
       return; 
     }
 
     // --- 인증 성공 시 각 작업 최종 완료 처리 수행 ---
 
-    // 1️⃣ [보관] 인증 성공 직후에 서버로 책 데이터 최종 등록 전송 (미리 등록 방지)
+    // 1️⃣ [보관] 사전 등록이 완료되었으므로 성공 시 UI 및 포인트 처리만 수행
     if (pendingActionData?.type === 'register') {
-      const bookInfo = pendingActionData.bookData;
-      const formData = new FormData();
-      
-      formData.append('title', bookInfo.title);
-      formData.append('author', bookInfo.author);
-      formData.append('publisher', bookInfo.publisher);
-      formData.append('condition', bookInfo.condition);
-      formData.append('storageNo', bookInfo.storageNo);
-      formData.append('lockerNo', bookInfo.lockerNo);
-      formData.append('owner', bookInfo.owner);
-      formData.append('ownerPin', bookInfo.ownerPin);
-      formData.append('auth_code_1', bookInfo.auth_code_1);
-
-      if (bookInfo.images && bookInfo.images.length > 0) {
-        for (const [index, uri] of bookInfo.images.entries()) {
-          const filename = uri.split('/').pop() || `book_${index}.jpg`;
-          const match = /\.(\w+)$/.exec(filename);
-          const type = match ? `image/${match[1]}` : `image/jpeg`;
-          const imgResponse = await fetch(uri);
-          const blob = await imgResponse.blob();
-          formData.append('images', blob, filename);
-        }
-      }
-
-      const registerResponse = await fetch(`${serverUrl}/api/books`, {
-        method: 'POST',
-        headers: { 'ngrok-skip-browser-warning': '69420' },
-        body: formData,
-      });
-
-      if (!registerResponse.ok) {
-        throw new Error('서버 도서 등록 실패');
-      }
-
       setUserPoints((prev) => prev + 100);
       Alert.alert('보관 완료', '보관함 문이 열렸습니다. 책을 넣어주세요! (+100 포인트 적립)');
       fetchBooks();
