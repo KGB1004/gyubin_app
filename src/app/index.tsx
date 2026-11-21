@@ -11,6 +11,20 @@ export default function SmartLibraryApp() {
 
   const [isLoading, setIsLoading] = useState(false);       // 연타 방지용 로딩 상태
 const [referralCount, setReferralCount] = useState(0);   // 추천인 등록 횟수 (최대 3회)
+
+const [penaltyStatus, setPenaltyStatus] = useState(0); // 패널티 상태와 버튼 클릭 차단 헬퍼 추가
+const isPenaltyBlocked = penaltyStatus > 0;
+
+const checkPenaltyBlocked = () => {
+  if (isPenaltyBlocked) {
+    Alert.alert(
+      '서비스 이용 불가',
+      '미반납 패널티가 부과되어 서비스 이용이 불가합니다.'
+    );
+    return true;
+  }
+  return false;
+};
   
   // 로그인/회원가입 입력 Form 상태
   const [authStudentId, setAuthStudentId] = useState('');
@@ -51,14 +65,14 @@ const [selectedPreviewImage, setSelectedPreviewImage] = useState<string[] | stri
   // 보관함별 리미트 스위치 상태 관리
   const [limitSwitches, setLimitSwitches] = useState<{ [key: string]: boolean }>({
     '제1보관함 (전공서적)-1구역': false,
-    '제1보관함 (전공서적)-2구역': true,
+    '제1보관함 (전공서적)-2구역': false,
     '제1보관함 (전공서적)-3구역': false,
-    '제1보관함 (전공서적)-4구역': true,
+    '제1보관함 (전공서적)-4구역': false,
     '제1보관함 (전공서적)-5구역': false,
-    '제2보관함 (자격증서적)-1구역': true,
+    '제2보관함 (자격증서적)-1구역': false,
     '제2보관함 (자격증서적)-2구역': false,
     '제2보관함 (자격증서적)-3구역': false,
-    '제2보관함 (자격증서적)-4구역': true,
+    '제2보관함 (자격증서적)-4구역': false,
     '제2보관함 (자격증서적)-5구역': false,
   });
 
@@ -80,6 +94,7 @@ const [selectedPreviewImage, setSelectedPreviewImage] = useState<string[] | stri
     storageNo: string;
     lockerNo: string;
     status: string;
+    isAvailable?: boolean; // <-- 여기 추가
     owner: string;
     ownerPin: string;
     borrower: string;
@@ -157,7 +172,11 @@ let parsedBookImages: string[] = [];
         condition: item.condition || item.book_condition || 'A급',
         storageNo: item.storageNo || '제1보관함 (전공서적)',
         lockerNo: item.lockerNo || '1구역',
-        status: (item.isAvailable === false || item.status === '대여 중' || (item.borrower && item.borrower.trim() !== '')) ? '대여 중' : '대여 가능',
+        status:
+          (item.borrower && item.borrower.trim() !== '') || item.status === '대여 중'
+            ? '대여 중'
+            : '대여 가능',
+        isAvailable: item.isAvailable !== false, // <-- 여기 추가
         owner: item.owner || '',
         ownerPin: item.ownerPin || '',
         borrower: item.borrower || '',
@@ -362,10 +381,21 @@ const handleLogin = async () => {
       setUserPoints(realPoints);
 
       // 원본 코드의 올바른 쿠폰 세터 함수명('setRentalCoupons') 사용
-      setRentalCoupons(data.coupons || []);
+      const rawCoupons = data.rentalCoupons ?? data.coupons ?? [];
+
+const mappedCoupons = Array.isArray(rawCoupons)
+  ? rawCoupons.map((c: any, idx: number) => ({
+      id: String(c.id ?? c.coupon_id ?? idx),
+      name: c.name ?? c.coupon_name ?? '스탬프 10개 달성 무료 도서 대여 쿠폰',
+      date: c.date ?? c.issue_date ?? c.issued_at ?? '',
+    }))
+  : [];
+
+setRentalCoupons(mappedCoupons);
       setUserStamps(data.stamps || 0);
       setExchangedGifticons(data.exchangedGifticons || data.gifticons || []);
-      
+      setReferralCount(Number(data.referralCount ?? data.usedReferralCount ?? 0));
+      setPenaltyStatus(Number(data.penalty_status ?? data.penaltyStatus ?? 0));
       setMyReferralCode(`USER_${authStudentId}`);
       setIsLoggedIn(true);
       
@@ -426,6 +456,8 @@ const handleLogin = async () => {
           setUserStamps(0);
           setRentalCoupons([]);
           setExchangedGifticons([]);
+          setReferralCount(0);
+          setPenaltyStatus(0);
         }
       }
     ]);
@@ -462,22 +494,30 @@ const handleLogin = async () => {
   // 대여 시간 카운트다운 훅 (로그아웃 여부와 관계없이 대여 중인 책의 시간이 흐르도록 수정)
   useEffect(() => {
     const countdownTimer = setInterval(() => {
-      setBooks((prevBooks) =>
-        prevBooks.map((book) => {
-          // 대여 중이고 남은 시간이 있다면 1초씩 감소
+      let expiredTitle: string | null = null;
+
+      setBooks((prevBooks) => {
+        const nextBooks = prevBooks.map((book) => {
           if (book.status === '대여 중' && book.rentalTimeLeft > 0) {
             const nextTime = book.rentalTimeLeft - 1;
-            if (nextTime === 0) {
-              Alert.alert(
-                '서비스 이용 정지 경고',
-                `[${book.title}] 반납 기한을 초과하였습니다!\n규정을 1회 위반하였으므로 즉시 재가입 및 서비스 이용이 중지됩니다.`
-              );
+            if (nextTime === 0 && !expiredTitle) {
+              expiredTitle = book.title;
             }
             return { ...book, rentalTimeLeft: nextTime };
           }
           return book;
-        })
-      );
+        });
+
+        if (expiredTitle) {
+          setPenaltyStatus((prev) => (prev > 0 ? prev : 1));
+          Alert.alert(
+            '서비스 이용 정지 경고',
+            `[${expiredTitle}] 반납 기한을 초과하였습니다!\n규정을 1회 위반하였으므로 즉시 재가입 및 서비스 이용이 중지됩니다.`
+          );
+        }
+
+        return nextBooks;
+      });
     }, 1000);
 
     return () => clearInterval(countdownTimer);
@@ -620,7 +660,7 @@ const handleSubmitReport = async () => {
     }
 
     Alert.alert(
-      '파손/분실 신고 접수 완료', 
+      '신고 접수 완료', 
       `[접수일시: ${reportCurrentDate}]\n책 주인(${selectedBookForReport.owner})님에게 알림이 전송되었습니다.`
     );
     setModalType(null);
@@ -637,43 +677,102 @@ const handleSubmitReport = async () => {
 
   const handleVerifyOwnerPin = (correctPin: string) => {
     if (enteredOwnerPin !== correctPin) {
-      Alert.alert('인증 실패', '책 주인의 고유 비밀번호가 일치하지 않습니다.');
+      Alert.alert('인증 실패', '책 주인 비밀번호 불일치.');
       setIsOwnerVerified(false);
       return;
     }
-    Alert.alert('인증 성공', '책 주인으로 확인되었습니다. 처리 버튼을 선택해주세요.');
+    Alert.alert('인증 성공', '책 주인으로 확인되었습니다. 처리 방식을 선택해주세요.');
     setIsOwnerVerified(true);
   };
 
   const executeLowerCondition = async (bookId: string, reportId: string) => {
-    //서버 DB에서 해당 신고 삭제 요청
-    try {
-    const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
-    await fetch(`${serverUrl}/api/reports/${reportId}`, { method: 'DELETE' });
+  const targetBook = books.find((b) => b.id === bookId);
+  if (!targetBook) return;
+
+  // 1. 해당 신고 내역에서 신고자 이름 찾기
+  const targetReport = (targetBook.reports || []).find((r) => r.id === reportId);
+  const reporterName = targetReport?.reporter;
+
+  // 2. 등급 한 단계 하향 계산
+  let nextCondition = targetBook.condition;
+  if (targetBook.condition === 'S급') nextCondition = 'A급';
+  else if (targetBook.condition === 'A급') nextCondition = 'B급';
+  else if (targetBook.condition === 'B급') nextCondition = 'C급';
+  else nextCondition = 'C급';
+
+  const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+  const isCurrentUserReporter = Boolean(reporterName && reporterName === currentUser.name);
+  const nextPoints = isCurrentUserReporter ? userPoints + 100 : userPoints;
+
+  try {
+    // 3. 서버 DB에 하향된 도서 등급 저장 (백엔드 경로/메서드에 맞춰 PATCH 또는 PUT 확인)
+    await fetch(`${serverUrl}/api/books/${bookId}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify({
+        condition: nextCondition,
+      }),
+    });
+
+    // 4. 서버 DB에서 해당 신고 삭제
+    await fetch(`${serverUrl}/api/reports/${reportId}`, {
+      method: 'DELETE',
+      headers: {
+        'ngrok-skip-browser-warning': '69420',
+      },
+    });
+
+    // 5. 현재 로그인한 사용자가 신고자인 경우 서버 포인트 동기화
+    if (isCurrentUserReporter) {
+      await fetch(`${serverUrl}/api/users/points`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '69420',
+        },
+        body: JSON.stringify({
+          studentId: currentUser.studentId,
+          points: nextPoints,
+        }),
+      });
+    }
   } catch (error) {
-    console.error('신고 삭제 통신 에러:', error);
+    console.error('등급 하향 / 신고 처리 통신 에러:', error);
   }
 
-    setBooks(
-      books.map((b) => {
-        if (b.id === bookId) {
-          let nextCondition = b.condition;
-          if (b.condition === 'S급') nextCondition = 'A급';
-          else if (b.condition === 'A급') nextCondition = 'B급';
-          else if (b.condition === 'B급') nextCondition = 'C급';
-          else nextCondition = 'C급 (파손 심함)';
-          const updatedReports = b.reports.filter((r) => r.id !== reportId);
-          Alert.alert('등급 조정 완료', `[${b.title}]의 등급이 [${nextCondition}]로 하향 조정되었습니다.`);
-          return { ...b, condition: nextCondition, reports: updatedReports };
-        }
-        return b;
-      })
-    );
-    setInputingPinForBookId(null);
-    setInputingReportId(null);
-    setEnteredOwnerPin('');
-    setIsOwnerVerified(false);
-  };
+  // 6. 신고자가 현재 로그인한 유저라면 앱 포인트 상태도 +100 반영
+  if (isCurrentUserReporter) {
+    setUserPoints(nextPoints);
+  }
+
+  // 7. 도서 목록 상태 업데이트(등급 반영 + 처리된 신고 제거)
+  setBooks((prevBooks) =>
+    prevBooks.map((b) => {
+      if (b.id === bookId) {
+        const updatedReports = (b.reports || []).filter((r) => r.id !== reportId);
+        return { ...b, condition: nextCondition, reports: updatedReports };
+      }
+      return b;
+    })
+  );
+
+  setInputingPinForBookId(null);
+  setInputingReportId(null);
+  setEnteredOwnerPin('');
+  setIsOwnerVerified(false);
+
+  Alert.alert(
+  '등급 조정 완료',
+  `[${targetBook.title}]의 등급이 [${nextCondition}]로 하향 조정되었습니다.\n신고자에게 100P 보상이 지급되었습니다.`
+);
+
+  if (typeof fetchBooks === 'function') {
+    fetchBooks();
+  }
+};
 
   const executeKeepCondition = async (bookId: string, reportId: string) => {
     
@@ -722,6 +821,7 @@ const handleSubmitReport = async () => {
   };
 
   const handleExchangeGifticon = async (giftName: string) => {
+    if (checkPenaltyBlocked()) return;
   const cost = 1000;
   if (userPoints < cost) {
     Alert.alert('포인트 부족', `포인트가 부족합니다! (필요: ${cost}P / 보유: ${userPoints}P)`);
@@ -761,69 +861,18 @@ const handleSubmitReport = async () => {
 };
 
   const handleSelectBookItem = (book: any) => {
-    setSelectedBookForRent(book);
-    setRentStep('selectType');
-  };
+  if (book.owner === currentUser.name) {
+    Alert.alert('대여 불가', '본인 도서는 대여할 수 없습니다.(부정행위 방지)');
+    return;
+  }
+  setSelectedBookForRent(book);
+  setRentStep('selectType');
+};
 
   const handleSelectRentalType = (typeObj: { name: string; hours: number; basePoints: number }) => {
     setSelectedRentalType(typeObj);
     setRentStep('selectPayment');
   };
-
-const initiateRentProcess = async (paymentMethod: string) => {
-  const totalRequiredPoints = selectedBookForRent && selectedRentalType
-    ? calculateRequiredPoints(selectedRentalType.hours, selectedBookForRent.condition)
-    : 100;
-
-  if (paymentMethod === 'points' && userPoints < totalRequiredPoints) {
-    Alert.alert('알림', `포인트가 부족합니다! (필요 포인트: ${totalRequiredPoints}P)`);
-    return;
-  }
-  if (paymentMethod !== 'points' && rentalCoupons.length <= 0) {
-    Alert.alert('알림', '사용 가능한 도서 대여 쿠폰이 없습니다.');
-    return;
-  }
-
-  const targetBook = selectedBookForRent;
-  if (!targetBook) return;
-
-  const newPin = generateRandomPin();
-  setStep1Pin(newPin);
-
-  try {
-    const slotInt = parseInt(targetBook.lockerNo.replace(/[^0-9]/g, '')) || 1;
-    const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
-    
-    await fetch(`${serverUrl}/api/rentals/auth-code`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420'
-      },
-      body: JSON.stringify({
-        cabinetSlot: slotInt,
-        auth_code_1: newPin,
-      }),
-    });
-
-    setPendingActionData({
-      type: 'rent',
-      bookId: targetBook.id,
-      targetBook,
-      paymentMethod,
-      rentalType: selectedRentalType,
-      totalRequiredPoints,
-      auth_code_1: newPin,
-    });
-    
-    setActiveLockerInfo('도서 대여 도어락 개방');
-    setHighlightZone(`${targetBook.storageNo}\n${targetBook.lockerNo}`);
-    setModalType('pinAuth');
-  } catch (error) {
-    console.error("대여 인증번호 동기화 에러:", error);
-    Alert.alert('오류', '서버 통신 중 문제가 발생했습니다.');
-  }
-};
 
 // 도서 보관 시 다중 사진 촬영 및 앨범 선택 함수
 const handlePickBookImages = async () => {
@@ -857,7 +906,7 @@ const handlePickBookImages = async () => {
           },
         },
         {
-          text: '앨범에서 여러 장 선택하기',
+          text: '앨범에서 선택하기',
           onPress: async () => {
             const result = await ImagePicker.launchImageLibraryAsync({
               mediaTypes: ImagePicker.MediaTypeOptions.Images,
@@ -884,21 +933,21 @@ const initiateReturnProcess = async (bookId: string) => {
 
   const newPin = generateRandomPin();
   setStep1Pin(newPin);
+  const slotInt = getCabinetSlotNumber(targetBook.storageNo);
 
   try {
-    const slotInt = parseInt(targetBook.lockerNo.replace(/[^0-9]/g, '')) || 1;
     const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
-
     const response = await fetch(`${serverUrl}/api/rentals/auth-code`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420'
+        'ngrok-skip-browser-warning': '69420',
       },
       body: JSON.stringify({
         cabinetSlot: slotInt,
+        storageNo: targetBook.storageNo,
+        lockerNo: targetBook.lockerNo,
         auth_code_1: newPin,
-        auth_code_2: "",
       }),
     });
 
@@ -912,10 +961,10 @@ const initiateReturnProcess = async (bookId: string) => {
     setPendingActionData({
       type: 'return',
       bookId: targetBook.id,
+      targetBook,
       storageNo: targetBook.storageNo,
-      lockerNo: targetBook.lockerNo
+      lockerNo: targetBook.lockerNo,
     });
-    
     setActiveLockerInfo('선택한 도서 반납 구역');
     setHighlightZone(`${targetBook.storageNo}\n${targetBook.lockerNo}`);
     setModalType('pinAuth');
@@ -928,6 +977,7 @@ const initiateReturnProcess = async (bookId: string) => {
 const initiateRetrieveProcess = async (bookId: string) => {
   const targetBook = books.find((b) => b.id === bookId);
   if (!targetBook) return;
+
   if (targetBook.status === '대여 중') {
     Alert.alert('회수 불가', '현재 다른 사용자가 대여 중인 도서는 회수할 수 없습니다.');
     return;
@@ -935,16 +985,46 @@ const initiateRetrieveProcess = async (bookId: string) => {
 
   const newPin = generateRandomPin();
   setStep1Pin(newPin);
+  const slotInt = getCabinetSlotNumber(targetBook.storageNo);
 
-  setPendingActionData({
-    type: 'retrieve',
-    bookId,
-    targetBook
-  });
+  try {
+    const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+    const response = await fetch(`${serverUrl}/api/books/auth-code`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify({
+        bookId: targetBook.id,
+        cabinetSlot: slotInt,
+        storageNo: targetBook.storageNo,
+        lockerNo: targetBook.lockerNo,
+        auth_code_1: newPin,
+      }),
+    });
 
-  setActiveLockerInfo('도서 회수 위치');
-  setHighlightZone(`${targetBook.storageNo}\n${targetBook.lockerNo}`);
-  setModalType('pinAuth');
+    if (!response.ok) {
+      const errText = await response.text();
+      console.log("회수 인증번호 Book 동기화 실패:", errText);
+      Alert.alert('오류', '회수 인증번호를 서버에 동기화하지 못했습니다.');
+      return;
+    }
+
+    setPendingActionData({
+      type: 'retrieve',
+      bookId: targetBook.id,
+      targetBook,
+      storageNo: targetBook.storageNo,
+      lockerNo: targetBook.lockerNo,
+    });
+    setActiveLockerInfo('도서 회수 위치');
+    setHighlightZone(`${targetBook.storageNo}\n${targetBook.lockerNo}`);
+    setModalType('pinAuth');
+  } catch (error) {
+    console.error("회수 인증번호 동기화 에러:", error);
+    Alert.alert('오류', '서버 통신 중 문제가 발생했습니다.');
+  }
 };
 
 const initiateRegisterProcess = async () => {
@@ -954,7 +1034,15 @@ const initiateRegisterProcess = async () => {
     return;
   }
   const zones = ['1구역', '2구역', '3구역', '4구역', '5구역'];
-  const emptyZone = zones.find((zone) => limitSwitches[`${selectedStorage}-${zone}`] === false);
+  // ★ [핵심 보완] 물리 센서가 false이고, 동시에 DB(books) 상에서도 해당 구역을 점유한 책이 없을 때만 빈자리로 인정
+  const emptyZone = zones.find((zone) => {
+    const isSensorFalse = limitSwitches[`${selectedStorage}-${zone}`] === false;
+    const isDbOccupied = books.some(
+      (b) => b.storageNo === selectedStorage && b.lockerNo === zone
+    );
+    return isSensorFalse && !isDbOccupied;
+  });
+
   if (!emptyZone) {
     Alert.alert('보관함 만석', `선택하신 [${selectedStorage}]의 모든 구역이 가득 찼습니다.`);
     return;
@@ -1029,90 +1117,184 @@ const initiateRegisterProcess = async () => {
   }
 };
 
+const getCabinetSlotNumber = (storageStr?: string): number => {
+  if (!storageStr) return 1;
+  if (storageStr.includes('2')) return 2;
+  const num = parseInt(String(storageStr).replace(/[^0-9]/g, ''), 10);
+  return isNaN(num) ? 1 : num;
+};
+
+const initiateRentProcess = async (paymentMethod: string) => {
+  const totalRequiredPoints =
+    selectedBookForRent && selectedRentalType
+      ? calculateRequiredPoints(selectedRentalType.hours, selectedBookForRent.condition)
+      : 100;
+
+  if (paymentMethod === 'points' && userPoints < totalRequiredPoints) {
+    Alert.alert('알림', `포인트가 부족합니다! (필요 포인트: ${totalRequiredPoints}P)`);
+    return;
+  }
+  if (paymentMethod !== 'points' && rentalCoupons.length <= 0) {
+    Alert.alert('알림', '사용 가능한 도서 대여 쿠폰이 없습니다.');
+    return;
+  }
+
+  const targetBook = selectedBookForRent;
+if (!targetBook) return;
+
+if (targetBook.owner === currentUser.name) {
+  Alert.alert('대여 불가', '본인 도서는 대여할 수 없습니다.(부정행위 방지)');
+  return;
+}
+
+  const newPin = generateRandomPin();
+  setStep1Pin(newPin);
+  const slotInt = getCabinetSlotNumber(targetBook.storageNo);
+
+  try {
+    const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+
+    // 1. 검증 전에 /api/rentals를 먼저 호출해 Rental 테이블에 대여 데이터 생성
+    const rentalResponse = await fetch(`${serverUrl}/api/rentals`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify({
+        bookId: targetBook.id,
+        userId: currentUser.name,
+        userName: currentUser.name,
+        paymentMethod,
+        rentalHours: selectedRentalType?.hours ?? 1,
+        totalPoints: totalRequiredPoints,
+        auth_code_1: newPin,
+      }),
+    });
+
+    const resText = await rentalResponse.text();
+    let resData: any = {};
+    try {
+      resData = resText ? JSON.parse(resText) : {};
+    } catch (e) {}
+
+    if (!rentalResponse.ok || resData.success === false) {
+      Alert.alert('대여 실패', resData.message || '서버에서 대여를 거절했습니다.');
+      return;
+    }
+
+    // 2. cabinetSlot(숫자) 및 auth_code_1 동기화
+    await fetch(`${serverUrl}/api/rentals/auth-code`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'ngrok-skip-browser-warning': '69420',
+      },
+      body: JSON.stringify({
+        cabinetSlot: slotInt,
+        storageNo: targetBook.storageNo,
+        lockerNo: targetBook.lockerNo,
+        auth_code_1: newPin,
+      }),
+    });
+
+    setPendingActionData({
+      type: 'rent',
+      bookId: targetBook.id,
+      targetBook,
+      paymentMethod,
+      rentalType: selectedRentalType,
+      totalRequiredPoints,
+      auth_code_1: newPin,
+      resData,
+    });
+    setActiveLockerInfo('도서 대여 도어락 개방');
+    setHighlightZone(`${targetBook.storageNo}\n${targetBook.lockerNo}`);
+    setModalType('pinAuth');
+  } catch (error) {
+    console.error("대여 인증번호 동기화 에러:", error);
+    Alert.alert('오류', '서버 통신 중 문제가 발생했습니다.');
+  }
+};
+
 const handleStep1KeypadSuccess = async () => {
   try {
     const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
-    
-    // ★ [수정] targetBook 또는 bookData 중 존재하는 객체에서 안전하게 꺼냄
-    const targetData = pendingActionData?.targetBook || pendingActionData?.bookData || {};
-    const currentLockerNo = targetData.lockerNo || pendingActionData?.lockerNo || '1구역';
-    const currentStorageNo = targetData.storageNo || '제 1보관함 (전공서적)';
-    const slotInt = parseInt(String(currentLockerNo).replace(/[^0-9]/g, '')) || 1;
+    const targetData =
+  pendingActionData?.bookData ||
+  pendingActionData?.targetBook ||
+  {};
+const currentLockerNo =
+  targetData.lockerNo ||
+  targetData.locker_no ||
+  pendingActionData?.lockerNo ||
+  '1구역';
+const currentStorageNo =
+  targetData.storageNo ||
+  targetData.storage_no ||
+  pendingActionData?.storageNo ||
+  '제1보관함 (전공서적)';
+const slotInt = getCabinetSlotNumber(currentStorageNo);
 
-    // ★ 작업 종류(type)에 따라 올바른 API 주소 선택
-    const isRentalOrReturn = pendingActionData?.type === 'rent' || pendingActionData?.type === 'return';
-    const verifyEndpoint = isRentalOrReturn 
-      ? '/api/app/verify-rental-step1' 
+    const isRentalOrReturn =
+      pendingActionData?.type === 'rent' || pendingActionData?.type === 'return';
+    const verifyEndpoint = isRentalOrReturn
+      ? '/api/app/verify-rental-step1'
       : '/api/app/verify-storage-step1';
 
-    console.log(`🔍 [1단계 검증] ${verifyEndpoint} 요청 - 보관함: ${currentStorageNo} / 수납장:`, slotInt);
+    console.log(`[1단계 검증] ${verifyEndpoint} 요청 - 보관함: ${currentStorageNo} / cabinetSlot:`, slotInt);
 
     const response = await fetch(`${serverUrl}${verifyEndpoint}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'ngrok-skip-browser-warning': '69420'
+        'ngrok-skip-browser-warning': '69420',
       },
       body: JSON.stringify({
-        cabinetSlot: currentStorageNo,          
-        storageNo: currentStorageNo,   
-        authCode: step1Pin,
-        auth_code_1: step1Pin
+        cabinetSlot: slotInt,
+        auth_code_1: step1Pin,
       }),
     });
 
     const data = await response.json();
     console.log("서버 인증 상태 응답:", data);
 
-    // open과 success 키값 모두 지원하도록 처리
     const isSuccess = data.open === true || data.success === true;
-
     if (!response.ok || !isSuccess) {
       Alert.alert('인증 실패', '키패드 비밀번호가 일치하지 않습니다. 다시 확인해주세요!');
-      return; 
+      return;
     }
 
-    // --- 인증 성공 시 각 작업 최종 완료 처리 수행 ---
-
-    // 1️⃣ [보관] 사전 등록이 완료되었으므로 성공 시 UI 및 포인트 처리만 수행
     if (pendingActionData?.type === 'register') {
-      setUserPoints((prev) => prev + 100);
+      const nextPoints = userPoints + 100;
+      setUserPoints(nextPoints);
+      try {
+        const pointResponse = await fetch(`${serverUrl}/api/users/points`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'ngrok-skip-browser-warning': '69420',
+          },
+          body: JSON.stringify({
+            studentId: currentUser.studentId,
+            points: nextPoints,
+          }),
+        });
+        if (!pointResponse.ok) {
+          const errText = await pointResponse.text();
+          console.log('보관 포인트 DB 동기화 실패:', errText);
+        }
+      } catch (pointErr) {
+        console.error('보관 포인트 동기화 통신 에러:', pointErr);
+      }
       Alert.alert('보관 완료', '보관함 문이 열렸습니다. 책을 넣어주세요! (+100 포인트 적립)');
       fetchBooks();
       setModalType(null);
-    } 
-    // 2️⃣ [대여]
-    else if (pendingActionData?.type === 'rent') {
+    } else if (pendingActionData?.type === 'rent') {
       const paymentMethod = pendingActionData.paymentMethod;
       const totalCost = pendingActionData.totalRequiredPoints;
       const targetBook = pendingActionData.targetBook;
-
-      const rentalResponse = await fetch(`${serverUrl}/api/rentals`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420'
-        },
-        body: JSON.stringify({
-          bookId: targetBook.id,
-          userId: currentUser.name,
-          userName: currentUser.name,
-          paymentMethod: paymentMethod,
-          rentalHours: pendingActionData.rentalType?.hours ?? 1,
-          totalPoints: totalCost,
-          auth_code_1: pendingActionData.auth_code_1,
-        }),
-      });
-
-      const resText = await rentalResponse.text();
-      let resData: any = {};
-      try { resData = resText ? JSON.parse(resText) : {}; } catch (e) {}
-
-      if (!rentalResponse.ok || (resData.success === false)) {
-        Alert.alert('대여 실패', resData.message || '서버에서 대여를 거절했습니다.');
-        setModalType(null);
-        return;
-      }
+      const resData = pendingActionData.resData || {};
 
       if (resData.updatedPoints !== undefined) {
         setUserPoints(resData.updatedPoints);
@@ -1128,17 +1310,21 @@ const handleStep1KeypadSuccess = async () => {
           const newCoupon = {
             id: Date.now().toString(),
             name: '스탬프 10개 달성 무료 도서 대여 쿠폰',
-            date: `${new Date().getFullYear()}.${String(new Date().getMonth() + 1).padStart(2, '0')}.${String(new Date().getDate()).padStart(2, '0')} 획득`
+            date: `${new Date().getFullYear()}.${String(new Date().getMonth() + 1).padStart(2, '0')}.${String(new Date().getDate()).padStart(2, '0')} 획득`,
           };
           setRentalCoupons((couponPrev) => [newCoupon, ...couponPrev]);
-          Alert.alert('스탬프 10개 달성!', '스탬프 10개가 모여 [무료 도서 대여 쿠폰]이 발급되었습니다!');
+          Alert.alert(
+            '스탬프 10개 달성!',
+            '스탬프 10개가 모여 [무료 도서 대여 쿠폰]이 발급되었습니다!'
+          );
           return 0;
         }
         return nextStamps;
       });
 
-      const maxExt = pendingActionData.rentalType.hours === 24 ? 0 : 2;
-      const initialSeconds = pendingActionData.rentalType.hours * 3600;
+      const rentalHours = pendingActionData.rentalType?.hours ?? 1;
+      const maxExt = rentalHours === 24 ? 0 : 2;
+      const initialSeconds = rentalHours * 3600;
 
       setBooks((prevBooks) =>
         prevBooks.map((b) =>
@@ -1149,35 +1335,37 @@ const handleStep1KeypadSuccess = async () => {
                 borrower: currentUser.name,
                 extensionCount: 0,
                 maxExtensions: maxExt,
-                initialHours: pendingActionData.rentalType.hours,
+                initialHours: rentalHours,
                 rentalTimeLeft: initialSeconds,
               }
             : b
         )
       );
-
       setLimitSwitches((prev) => ({
         ...prev,
         [`${targetBook.storageNo}-${targetBook.lockerNo}`]: false,
       }));
-
-      Alert.alert('대여 완료', `[${pendingActionData.rentalType.name} 대여 시작]\n도어락이 열렸습니다.`);
+      Alert.alert(
+        '대여 완료',
+        `[${pendingActionData.rentalType?.name || '대여'} 대여 시작]\n도어락이 열렸습니다.`
+      );
       setModalType(null);
-    } 
-    // 3️⃣ [반납]
-    else if (pendingActionData?.type === 'return') {
+    } else if (pendingActionData?.type === 'return') {
       const { bookId, storageNo, lockerNo } = pendingActionData;
       await fetch(`${serverUrl}/api/returns`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'ngrok-skip-browser-warning': '69420'
+          'ngrok-skip-browser-warning': '69420',
         },
-        body: JSON.stringify({ bookId: bookId })
+        body: JSON.stringify({ bookId }),
       });
-
       setBooks((prevBooks) =>
-        prevBooks.map((b) => (b.id === bookId ? { ...b, status: '대여 가능', borrower: "", extensionCount: 0, rentalTimeLeft: 0 } : b))
+        prevBooks.map((b) =>
+          b.id === bookId
+            ? { ...b, status: '대여 가능', borrower: '', extensionCount: 0, rentalTimeLeft: 0 }
+            : b
+        )
       );
       setLimitSwitches((prev) => ({
         ...prev,
@@ -1185,19 +1373,17 @@ const handleStep1KeypadSuccess = async () => {
       }));
       Alert.alert('반납 완료', '지정된 보관함에 반납이 완료되었습니다.');
       setModalType(null);
-    } 
-    // 4️⃣ [회수]
-    else if (pendingActionData?.type === 'retrieve') {
-      const target = pendingActionData.targetBook || books.find((b) => b.id === pendingActionData.bookId);
+    } else if (pendingActionData?.type === 'retrieve') {
+      const target =
+        pendingActionData.targetBook || books.find((b) => b.id === pendingActionData.bookId);
       if (!target) {
         setModalType(null);
         return;
       }
       await fetch(`${serverUrl}/api/books/${target.id}`, {
         method: 'DELETE',
-        headers: { 'ngrok-skip-browser-warning': '69420' }
+        headers: { 'ngrok-skip-browser-warning': '69420' },
       });
-
       setBooks((prevBooks) => prevBooks.filter((b) => b.id !== target.id));
       setLimitSwitches((prev) => ({
         ...prev,
@@ -1206,7 +1392,6 @@ const handleStep1KeypadSuccess = async () => {
       Alert.alert('회수 완료', '보관함에서 책을 완전히 회수하였습니다.');
       setModalType(null);
     }
-
   } catch (error) {
     console.error('인증 통신 에러:', error);
     Alert.alert('오류', '통신 중 문제가 발생했습니다.');
@@ -1271,6 +1456,7 @@ const handleStep1KeypadSuccess = async () => {
 };
 
   const handleExtendRental = (bookId: string) => {
+    if (checkPenaltyBlocked()) return;
     setBooks((prevBooks) =>
       prevBooks.map((b) => {
         if (b.id === bookId) {
@@ -1297,10 +1483,15 @@ const booksWithReports = books.filter(
   (b) => b.owner === currentUser.name && b.reports && b.reports.length > 0
 );
   const filteredAvailableBooks = books.filter((b) => {
-    if (b.status !== '대여 가능') return false;
-    const query = searchQuery.toLowerCase();
-    return b.title.toLowerCase().includes(query) || b.author.toLowerCase().includes(query) || b.owner.toLowerCase().includes(query);
-  });
+  if (b.status !== '대여 가능' || b.isAvailable === false) return false;
+  if (b.owner === currentUser.name) return false; // 본인이 보관한 책 대여 차단(포인트 부정행위 방지)
+  const query = searchQuery.toLowerCase();
+  return (
+    b.title.toLowerCase().includes(query) ||
+    b.author.toLowerCase().includes(query) ||
+    b.owner.toLowerCase().includes(query)
+  );
+});
 
   // -------------------------------------------------------------
   // [추가] 로그인 및 회원가입 화면 UI (isLoggedIn === false 일 때 렌더링)
@@ -1310,8 +1501,8 @@ const booksWithReports = books.filter(
       <SafeAreaView style={styles.container}>
         <View style={styles.authContainer}>
           <View style={styles.authHeaderBox}>
-            <Text style={styles.authMainTitle}>IT융합대학 스마트 플랫폼</Text>
-            <Text style={styles.authSubTitle}>스마트 무인 도서 대여 서비스</Text>
+            <Text style={styles.authMainTitle}>IT융합대학 캡스톤 디자인</Text>
+            <Text style={styles.authSubTitle}>포인트 기반 무인 도서 대여 시스템 </Text>
           </View>
 
           <View style={styles.authCard}>
@@ -1383,7 +1574,7 @@ const booksWithReports = books.filter(
       <View style={styles.header}>
         <View style={styles.headerBanner}>
           <View>
-            <Text style={styles.headerTitle}>IT융합대학 스마트 플랫폼</Text>
+            <Text style={styles.headerTitle}>IT융합대학 도서대여 플랫폼</Text>
             <Text style={styles.headerSub}>환영합니다, {currentUser.name}님 ({currentUser.studentId})</Text>
           </View>
           <View style={{ flexDirection: 'row', gap: 8 }}>
@@ -1397,11 +1588,16 @@ const booksWithReports = books.filter(
         {/* 내 포인트 배너 및 포인트 변환 버튼 */}
         <View style={styles.pointCard}>
           <View>
-            <Text style={styles.pointCardLabel}>내 포인트 (가입 축하 1000P 지급)</Text>
+            <Text style={styles.pointCardLabel}>내 포인트 (최초 가입 1000P)</Text>
             <Text style={styles.pointCardValue}>{userPoints.toLocaleString()} P</Text>
           </View>
-          <TouchableOpacity style={styles.exchangeHeaderBtn} onPress={() => setModalType('exchangeGifticon')}>
-            <Text style={{ color: '#fff', fontSize: 11, fontWeight: 'bold' }}>포인트 변환하기</Text>
+          <TouchableOpacity
+  style={styles.exchangeHeaderBtn}
+  onPress={() => {
+    if (checkPenaltyBlocked()) return;
+    setModalType('exchangeGifticon');
+  }}>
+            <Text style={{ color: '#fff', fontSize: 11, fontWeight: 'bold' }}>기프트콘 변환하기</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -1413,7 +1609,7 @@ const booksWithReports = books.filter(
             {booksWithReports.length > 0 && (
               <View style={styles.notificationAlertBox}>
                 <Text style={{ color: '#f59e0b', fontSize: 13, fontWeight: 'bold', marginBottom: 6 }}>
-                  [알림] 보관된 도서에 파손/분실 신고가 접수되었습니다! (주인 고유 비밀번호 판별 필요)
+                  [알림] 보관한 도서에 신고가 접수되었습니다!
                 </Text>
                 {booksWithReports.map((book) => (
                   <View key={book.id} style={{ backgroundColor: '#0f172a', padding: 10, borderRadius: 8, marginTop: 4, borderWidth: 1, borderColor: '#f59e0b' }}>
@@ -1446,10 +1642,10 @@ const booksWithReports = books.filter(
 ) : null}
                         {inputingPinForBookId === book.id && inputingReportId === rep.id ? (
                           <View style={{ marginTop: 8, backgroundColor: '#1e293b', padding: 8, borderRadius: 6 }}>
-                            <Text style={{ color: '#38bdf8', fontSize: 11, marginBottom: 4 }}>책 주인의 고유 비밀번호(4자리) 입력 후 판별</Text>
+                            <Text style={{ color: '#38bdf8', fontSize: 11, marginBottom: 4 }}>신고 내용 열람하기</Text>
                             <TextInput
                               style={[styles.input, { height: 36, marginBottom: 6 }]}
-                              placeholder="고유 비밀번호 입력"
+                              placeholder="책 주인 비밀번호 입력"
                               placeholderTextColor="#64748b"
                               secureTextEntry={true}
                               keyboardType="numeric"
@@ -1461,7 +1657,7 @@ const booksWithReports = books.filter(
                                 style={[styles.submitBtn, { marginTop: 0, marginBottom: 0, padding: 8, backgroundColor: '#0284c7' }]}
                                 onPress={() => handleVerifyOwnerPin(book.ownerPin)}
                               >
-                                <Text style={{ color: '#fff', fontSize: 11, fontWeight: 'bold' }}>확인 (주인 여부 판별)</Text>
+                                <Text style={{ color: '#fff', fontSize: 11, fontWeight: 'bold' }}>입력 완료</Text>
                               </TouchableOpacity>
                             ) : (
                               <View style={{ gap: 6, marginTop: 4 }}>
@@ -1470,21 +1666,15 @@ const booksWithReports = books.filter(
                                     style={[styles.submitBtn, { flex: 1, marginTop: 0, marginBottom: 0, padding: 8, backgroundColor: '#b45309' }]}
                                     onPress={() => executeLowerCondition(book.id, rep.id)}
                                   >
-                                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: 'bold' }}>▲파손 확인 및 등급 내리기</Text>
+                                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: 'bold' }}>파손 확인 (등급 내리기)</Text>
                                   </TouchableOpacity>
                                   <TouchableOpacity
                                     style={[styles.submitBtn, { flex: 1, marginTop: 0, marginBottom: 0, padding: 8, backgroundColor: '#059669' }]}
                                     onPress={() => executeKeepCondition(book.id, rep.id)}
                                   >
-                                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: 'bold' }}>허위신고 (등급 유지)</Text>
+                                    <Text style={{ color: '#fff', fontSize: 10, fontWeight: 'bold' }}>신고 무시 (등급 유지)</Text>
                                   </TouchableOpacity>
                                 </View>
-                                <TouchableOpacity
-                                  style={[styles.submitBtn, { backgroundColor: '#475569', marginTop: 0, marginBottom: 0, padding: 8 }]}
-                                  onPress={() => executeCancelReport(book.id, rep.id)}
-                                >
-                                  <Text style={{ color: '#fff', fontSize: 10, fontWeight: 'bold' }}>잘못 누름 / 신고 취소하기</Text>
-                                </TouchableOpacity>
                               </View>
                             )}
                             <TouchableOpacity
@@ -1520,11 +1710,12 @@ const booksWithReports = books.filter(
             )}
 
             {/* 빌리는 사람의 기능 세션 */}
-            <Text style={styles.sectionCategoryHeader}>빌리는 사람의 기능 (대여 & 반납)</Text>
+            <Text style={styles.sectionCategoryHeader}> -------------------- 대여 & 반납 ------------------- </Text>
             <View style={styles.actionGrid}>
               <TouchableOpacity
   style={[styles.bigCard, styles.cardGreen]}
   onPress={() => {
+    if (checkPenaltyBlocked()) return;
     setRentStep('selectBook');
     setSelectedBookForRent(null);
     setSelectedRentalType(null);
@@ -1537,23 +1728,26 @@ const booksWithReports = books.filter(
   }}
 >
                 <Text style={styles.cardIcon}>📖</Text>
-                <Text style={styles.cardTitle}>도서 대여하기</Text>
-                <Text style={styles.cardSub}>검색 기능 및 등급별/시간별 차감 적용{'\n'}(시간권 / 종일권)</Text>
+                <Text style={styles.cardTitle}>대여하기</Text>
+                <Text style={styles.cardSub}>이제 포인트로 대여하세요!</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.bigCard, styles.cardPurple]}
-                onPress={() => setModalType('returnBookModal')}
+  style={[styles.bigCard, styles.cardPurple]}
+  onPress={() => {
+    if (checkPenaltyBlocked()) return;
+    setModalType('returnBookModal');
+  }}
               >
                 <Text style={styles.cardIcon}>🔄</Text>
-                <Text style={styles.cardTitle}>도서 반납하기</Text>
-                <Text style={styles.cardSub}>대여 중인 도서 선택 후{'\n'}지정된 보관함 반납</Text>
+                <Text style={styles.cardTitle}>반납하기</Text>
+                <Text style={styles.cardSub}>배정된 보관함에 반납해주세요.</Text>
               </TouchableOpacity>
             </View>
 
             {/* 대여 중인 도서 및 실시간 잔여 시간 카운트다운 */}
             <View style={styles.borrowerSectionBox}>
-              <Text style={{ color: '#f8fafc', fontSize: 13, fontWeight: 'bold', marginBottom: 4 }}>⏳ 대여 중인 도서 및 실시간 잔여 시간</Text>
-              <Text style={{ color: '#f43f5e', fontSize: 11, fontWeight: 'bold', marginBottom: 8 }}>⚠️ 경고: 제한 시간 내 미반납 시 패널티가 부과됩니다.</Text>
+              <Text style={{ color: '#f8fafc', fontSize: 13, fontWeight: 'bold', marginBottom: 4 }}>⏳ 대여 도서: 실시간 잔여 시간</Text>
+              <Text style={{ color: '#f43f5e', fontSize: 10, fontWeight: 'bold', marginBottom: 8 }}>⚠️ 제한 시간 내 미반납 시 패널티가 부과됩니다. (연장을 눌러 시간을 확보하세요!)</Text>
               {books.filter((b) => b.borrower === currentUser.name).length > 0 ? (
   books.filter((b) => b.borrower === currentUser.name).map((b) => {
     // [핵심] 남은 시간이 3시간 초과면 무조건 종일권(24시간)으로 판별
@@ -1602,43 +1796,75 @@ const booksWithReports = books.filter(
               
             </View>
 
-            {/* 빌려주는 사람의 기능 세션 */}
-            <Text style={[styles.sectionCategoryHeader, { marginTop: 15 }]}>빌려주는 사람의 기능 (보관 & 회수)</Text>
+            <Text style={[styles.sectionCategoryHeader, { marginTop: 15 }]}>-------------------- 보관 & 회수 -------------------</Text>
             <View style={styles.actionGrid}>
               <TouchableOpacity
-                style={[styles.bigCard, styles.cardBlue]}
-                onPress={() => setModalType('register')}
+  style={[styles.bigCard, styles.cardBlue]}
+  onPress={() => {
+    if (checkPenaltyBlocked()) return;
+    setModalType('register');
+  }}
               >
                 <Text style={styles.cardIcon}>📦</Text>
-                <Text style={styles.cardTitle}>내 책 보관하기</Text>
-                <Text style={styles.cardSub}>주인 이름 및 고유 비밀번호 설정{'\n'}실물 사진 및 UV-C 등록 (+100P)</Text>
+                <Text style={styles.cardTitle}>보관하기</Text>
+                <Text style={styles.cardSub}>내 책 보관하고 포인트 받자!</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.bigCard, styles.cardOrange]}
-                onPress={() => setModalType('retrieve')}
+  style={[styles.bigCard, styles.cardOrange]}
+  onPress={() => {
+    if (checkPenaltyBlocked()) return;
+    setModalType('retrieve');
+  }}
               >
                 <Text style={styles.cardIcon}>📤</Text>
-                <Text style={styles.cardTitle}>등록한 책 회수하기</Text>
-                <Text style={styles.cardSub}>내가 보관한 책 직접 찾기{'\n'}리미트 스위치 OFF 해제</Text>
+                <Text style={styles.cardTitle}>회수하기</Text>
+                <Text style={styles.cardSub}>필요하다면 회수해가세요!</Text>
               </TouchableOpacity>
             </View>
 
             {/* 부가 시스템 및 관리 툴 */}
             <View style={[styles.toolsSection, { marginTop: 10 }]}>
-              <Text style={styles.toolsHeader}>부가 시스템 및 관리 툴</Text>
+              <Text style={styles.toolsHeader}>부가 시스템</Text>
               <View style={styles.toolsGrid}>
-                <TouchableOpacity style={styles.toolBtn} onPress={() => setModalType('rentalCouponsModal')}>
-                  <Text style={styles.toolBtnText}>🎫 도서 대여 쿠폰함 ({rentalCoupons.length}장)</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.toolBtn} onPress={() => setModalType('gifticonCouponsModal')}>
-                  <Text style={styles.toolBtnText}>🎁 포인트 변환 쿠폰함 ({exchangedGifticons.length}장)</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.toolBtn} onPress={() => setModalType('referral')}>
-                  <Text style={styles.toolBtnText}>👥 친구추천/공유</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.toolBtn} onPress={openReportModal}>
-                  <Text style={styles.toolBtnText}>⚠️ 분실/파손 신고 접수</Text>
-                </TouchableOpacity>
+                <TouchableOpacity
+  style={styles.toolBtn}
+  onPress={() => {
+    if (checkPenaltyBlocked()) return;
+    setModalType('rentalCouponsModal');
+  }}
+>
+  <Text style={styles.toolBtnText}>🎟️ 스탬프 & 대여 쿠폰함 {'\n'}({rentalCoupons.length}장)</Text>
+</TouchableOpacity>
+
+<TouchableOpacity
+  style={styles.toolBtn}
+  onPress={() => {
+    if (checkPenaltyBlocked()) return;
+    setModalType('gifticonCouponsModal');
+  }}
+>
+  <Text style={styles.toolBtnText}>🎁 기프트콘 변환 쿠폰함 {'\n'}({exchangedGifticons.length}장)</Text>
+</TouchableOpacity>
+
+<TouchableOpacity
+  style={styles.toolBtn}
+  onPress={() => {
+    if (checkPenaltyBlocked()) return;
+    setModalType('referral');
+  }}
+>
+  <Text style={styles.toolBtnText}>👥 친구 추천 이벤트 {'\n'}({referralCount}/3회)</Text>
+</TouchableOpacity>
+
+<TouchableOpacity
+  style={styles.toolBtn}
+  onPress={() => {
+    if (checkPenaltyBlocked()) return;
+    openReportModal();
+  }}
+>
+  <Text style={styles.toolBtnText}>⚠️ 대여 도서 신고 접수 {'\n'}(+100 P)</Text>
+</TouchableOpacity>
               </View>
             </View>
           </>
@@ -1666,9 +1892,9 @@ const booksWithReports = books.filter(
             {modalType === 'rentalCouponsModal' && (
               <ScrollView style={{ maxHeight: 500 }} showsVerticalScrollIndicator={false}>
                 <Text style={styles.modalTitle}>도서 대여 쿠폰함</Text>
-                <Text style={styles.modalDesc}>도서 대여 시 현금 대신 사용할 수 있는 대여권 및 스탬프 적립 쿠폰 목록입니다.</Text>
+                <Text style={styles.modalDesc}>도서 대여 시 포인트 대신 사용할 수 있는 쿠폰 목록입니다. {'\n'}스탬프 10개가 쌓이면 무료 도서 대여 쿠폰 1개가 발급됩니다.</Text>
                 <View style={{ backgroundColor: '#0f172a', padding: 12, borderRadius: 10, marginBottom: 14, borderWidth: 1, borderColor: '#334155' }}>
-                  <Text style={{ color: '#fbbf24', fontSize: 12, fontWeight: 'bold', marginBottom: 8 }}>* 도서 대여 스탬프 현황 ({userStamps} / 10)</Text>
+                  <Text style={{ color: '#fbbf24', fontSize: 12, fontWeight: 'bold', marginBottom: 8 }}>* 스탬프 현황 ({userStamps} / 10)</Text>
                   <View style={styles.stampGrid}>
                     {Array.from({ length: 10 }).map((_, index) => {
                       const isStamped = index < userStamps;
@@ -1698,7 +1924,7 @@ const booksWithReports = books.filter(
             {modalType === 'gifticonCouponsModal' && (
               <ScrollView style={{ maxHeight: 500 }} showsVerticalScrollIndicator={false}>
                 <Text style={styles.modalTitle}>포인트 변환 기프트콘 쿠폰함</Text>
-                <Text style={styles.modalDesc}>포인트로 변환하여 획득한 혜택 쿠폰 목록입니다.</Text>
+                <Text style={styles.modalDesc}>포인트로 변환하여 획득한 기프트콘 쿠폰 목록입니다.{'\n'}각 제휴처에 제시 후 사용하세요.</Text>
                 {exchangedGifticons.length > 0 ? (
                   <View style={{ gap: 8 }}>
                     {exchangedGifticons.map((item, index) => (
@@ -1720,7 +1946,7 @@ const booksWithReports = books.filter(
                 <Text style={styles.modalTitle}>포인트 기프트콘 교환소</Text>
                 <Text style={styles.modalDesc}>모아둔 포인트를 학교 및 제휴 혜택으로 자유롭게 변환하세요!</Text>
                 <View style={{ backgroundColor: '#0f172a', padding: 12, borderRadius: 8, marginBottom: 14, borderWidth: 1, borderColor: '#38bdf8', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <Text style={{ color: '#38bdf8', fontSize: 12, fontWeight: 'bold' }}>내 현재 보유 포인트</Text>
+                  <Text style={{ color: '#38bdf8', fontSize: 12, fontWeight: 'bold' }}>현재 보유 포인트</Text>
                   <Text style={{ color: '#fbbf24', fontSize: 16, fontWeight: 'bold' }}>{userPoints.toLocaleString()} P</Text>
                 </View>
                 <View style={{ gap: 10, marginBottom: 16 }}>
@@ -1754,7 +1980,7 @@ const booksWithReports = books.filter(
                 <Text style={styles.modalTitle}>도서 대여하기</Text>
                 {rentStep === 'selectBook' ? (
                   <>
-                    <Text style={styles.modalDesc}>1단계: 검색 기능을 사용하여 도서를 찾아보세요.</Text>
+                    <Text style={styles.modalDesc}>검색 기능을 사용해 도서를 찾아보세요.</Text>
                     <TextInput
                       style={[styles.input, { marginBottom: 12 }]}
                       placeholder="🔍 책 제목, 저자, 소유자 검색"
@@ -1762,7 +1988,7 @@ const booksWithReports = books.filter(
                       value={searchQuery}
                       onChangeText={setSearchQuery}
                     />
-                    <Text style={{ color: '#cbd5e1', fontSize: 12, marginBottom: 6 }}>대여 가능한 도서 목록</Text>
+                    <Text style={{ color: '#cbd5e1', fontSize: 12, marginBottom: 6 }}>대여 가능 도서 목록</Text>
                     {filteredAvailableBooks.map((b) => {
   const plh = calculateRequiredPoints(1, b.condition);
   const p2h = calculateRequiredPoints(2, b.condition);
@@ -1807,7 +2033,7 @@ const booksWithReports = books.filter(
                   </>
                 ) : rentStep === 'selectType' ? (
                   <>
-                    <Text style={styles.modalDesc}>2단계: 대여권 종류를 선택해주세요.</Text>
+                    <Text style={styles.modalDesc}>대여권 종류를 선택해주세요.</Text>
                     {(() => {
                       const cond = selectedBookForRent?.condition || 'S급';
                       const p1h = calculateRequiredPoints(1, cond);
@@ -1816,7 +2042,7 @@ const booksWithReports = books.filter(
                       return (
                         <>
                           <View style={{ backgroundColor: '#0f172a', padding: 12, borderRadius: 8, marginBottom: 14, borderWidth: 1, borderColor: '#38bdf8' }}>
-                            <Text style={{ color: '#38bdf8', fontSize: 11, fontWeight: 'bold' }}>선택한 도서 및 등급</Text>
+                            <Text style={{ color: '#38bdf8', fontSize: 11, fontWeight: 'bold' }}>선택한 도서: </Text>
                             <Text style={{ color: '#fff', fontSize: 14, fontWeight: 'bold', marginTop: 2 }}>
                               {selectedBookForRent?.title} <Text style={{ color: '#34d399' }}>({cond})</Text>
                             </Text>
@@ -1839,26 +2065,26 @@ const booksWithReports = books.filter(
                       );
                     })()}
                     <TouchableOpacity style={{ alignItems: 'center', padding: 8 }} onPress={() => setRentStep('selectBook')}>
-                      <Text style={{ color: '#94a3b8', fontSize: 12 }}>← 도서 다시 선택하기</Text>
+                      <Text style={{ color: '#94a3b8', fontSize: 12 }}>← 뒤로 </Text>
                     </TouchableOpacity>
                   </>
                 ) : (
                   <>
-                    <Text style={styles.modalDesc}>3단계: 결제 수단을 선택해주세요.</Text>
+                    <Text style={styles.modalDesc}>결제 수단을 선택해주세요.</Text>
                     {(() => {
                       const totalCost = selectedRentalType ? selectedRentalType.basePoints : 100;
                       return (
                         <View style={{ backgroundColor: '#0f172a', padding: 12, borderRadius: 8, marginBottom: 14, borderWidth: 1, borderColor: '#38bdf8' }}>
-                          <Text style={{ color: '#38bdf8', fontSize: 11, fontWeight: 'bold' }}>최종 결제 내역</Text>
+                          <Text style={{ color: '#38bdf8', fontSize: 12, fontWeight: 'bold' }}>최종 결제 내역: </Text>
                           <Text style={{ color: '#fff', fontSize: 14, fontWeight: 'bold', marginTop: 2 }}>{selectedBookForRent?.title} ({selectedRentalType?.name})</Text>
-                          <Text style={{ color: '#34d399', fontSize: 12, fontWeight: 'bold', marginTop: 2 }}>최종 차감 포인트: {totalCost} P</Text>
+                          <Text style={{ color: '#34d399', fontSize: 11, fontWeight: 'bold', marginTop: 2 }}>차감 포인트: {totalCost} P</Text>
                         </View>
                       );
                     })()}
                     <View style={{ gap: 8, marginBottom: 16 }}>
                       <TouchableOpacity style={[styles.paymentOptionBtn, { backgroundColor: '#1d4ed8' }]} onPress={() => initiateRentProcess('points')}>
-                        <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 13 }}>★ 포인트로 결제</Text>
-                        <Text style={{ color: '#93c5fd', fontSize: 11, marginTop: 2 }}>보유 포인트: {userPoints} P</Text>
+                        <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 13 }}>포인트 결제</Text>
+                        <Text style={{ color: '#93c5fd', fontSize: 11, marginTop: 2 }}>(보유 포인트: {userPoints} P)</Text>
                       </TouchableOpacity>
                       <TouchableOpacity
                         style={[styles.paymentOptionBtn, rentalCoupons.length > 0 ? { backgroundColor: '#065f46' } : { backgroundColor: '#334155', opacity: 0.6 }]}
@@ -1870,12 +2096,12 @@ const booksWithReports = books.filter(
                           initiateRentProcess('쿠폰');
                         }}
                       >
-                        <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 13 }}>보유 대여 쿠폰으로 결제하기</Text>
-                        <Text style={{ color: '#6ee7b7', fontSize: 11, marginTop: 2 }}>쿠폰 1장 사용 (잔여: {rentalCoupons.length}장)</Text>
+                        <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 13 }}>무료 대여쿠폰 결제</Text>
+                        <Text style={{ color: '#93c5fd', fontSize: 11, marginTop: 2 }}>(보유 쿠폰: {rentalCoupons.length}장)</Text>
                       </TouchableOpacity>
                     </View>
                     <TouchableOpacity style={{ alignItems: 'center', padding: 8 }} onPress={() => setRentStep('selectType')}>
-                      <Text style={{ color: '#94a3b8', fontSize: 12 }}>← 대여권 종류 다시 선택하기</Text>
+                      <Text style={{ color: '#94a3b8', fontSize: 12 }}>← 뒤로 </Text>
                     </TouchableOpacity>
                   </>
                 )}
@@ -1900,8 +2126,8 @@ const booksWithReports = books.filter(
 
             {modalType === 'register' && (
   <ScrollView style={{ maxHeight: 500 }} showsVerticalScrollIndicator={false}>
-    <Text style={styles.modalTitle}>내 책 보관하기</Text>
-    <Text style={{ color: '#cbd5e1', fontSize: 12, marginBottom: 6 }}>보관함 종류</Text>
+    <Text style={styles.modalTitle}>보관하기</Text>
+    <Text style={{ color: '#cbd5e1', fontSize: 12, marginBottom: 6 }}>보관함 선택</Text>
     <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12 }}>
       {[
         { label: '제1보관함 (전공)', val: '제1보관함 (전공서적)' },
@@ -1931,7 +2157,7 @@ const booksWithReports = books.filter(
       })}
     </View>
     <Text style={{ color: '#cbd5e1', fontSize: 12, marginBottom: 6, marginTop: 10 }}>
-  도서 실물 사진 다중 첨부 ({bookImageUris.length}장)
+  도서 실물 사진 첨부 ({bookImageUris.length}장)
 </Text>
 <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
   <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
@@ -1963,7 +2189,7 @@ const booksWithReports = books.filter(
   </View>
 </ScrollView>
 
-    <Text style={{ color: '#cbd5e1', fontSize: 12, marginBottom: 6 }}>도서 등급</Text>
+    <Text style={{ color: '#cbd5e1', fontSize: 12, marginBottom: 6 }}>도서 등급 선택</Text>
     <View style={{ flexDirection: 'row', gap: 6, marginBottom: 12 }}>
       {['S급', 'A급', 'B급', 'C급'].map((cond) => (
         <TouchableOpacity
@@ -1990,7 +2216,7 @@ const booksWithReports = books.filter(
     <TextInput style={styles.input} placeholder="출판사" placeholderTextColor="#64748b" value={newPublisher} onChangeText={setNewPublisher} />
     
     <TouchableOpacity style={styles.submitBtn} onPress={initiateRegisterProcess}>
-      <Text style={styles.submitBtnText}>빈자리 자동 배정 및 인증 시작</Text>
+      <Text style={styles.submitBtnText}>자동 자리 배정 & 인증번호 확인</Text>
     </TouchableOpacity>
   </ScrollView>
 )}
@@ -2076,14 +2302,14 @@ const booksWithReports = books.filter(
                 <Text style={{ color: '#cbd5e1', fontSize: 12, marginBottom: 6 }}>상세 내용 입력</Text>
                 <TextInput
                   style={[styles.input, { height: 80, textAlignVertical: 'top' }]}
-                  placeholder="파손 부위나 분실 경위를 상세히 적어주세요."
+                  placeholder="신고 내용을 상세히 적어주세요."
                   placeholderTextColor="#64748b"
                   multiline={true}
                   value={reportDetail}
                   onChangeText={setReportDetail}
                 />
                 <TouchableOpacity style={styles.submitBtn} onPress={handleSubmitReport}>
-                  <Text style={styles.submitBtnText}>책 주인에게 파손/분실 신고 전송하기</Text>
+                  <Text style={styles.submitBtnText}>책 주인에게 신고 전송하기</Text>
                 </TouchableOpacity>
               </ScrollView>
             )}
@@ -2097,13 +2323,13 @@ const booksWithReports = books.filter(
     </View>
 
     <View style={styles.pinContainer}>
-      <Text style={{ color: '#38bdf8', fontSize: 11, fontWeight: 'bold' }}>[임시 인증번호]</Text>
+      <Text style={{ color: '#38bdf8', fontSize: 11, fontWeight: 'bold' }}>[인증번호]</Text>
       <Text style={styles.pinText}>{step1Pin}</Text>
       <TouchableOpacity 
         style={[styles.submitBtn, { width: '100%', backgroundColor: '#0284c7', marginTop: 12, marginBottom: 0 }]}
         onPress={handleStep1KeypadSuccess}
       >
-        <Text style={styles.submitBtnText}>키패드 입력 완료 (인증 확인)</Text>
+        <Text style={styles.submitBtnText}>키패드 입력 완료</Text>
       </TouchableOpacity>
     </View>
   </View>
@@ -2112,11 +2338,11 @@ const booksWithReports = books.filter(
             {modalType === 'referral' && (
               <View>
                 <Text style={styles.modalTitle}>친구 추천 이벤트</Text>
-                <Text style={styles.modalDesc}>친구에게 내 추천 코드를 공유하고 보상을 받으세요!</Text>
+                <Text style={styles.modalDesc}>친구와 추천 코드를 공유하고 양방향 +100P 받으세요!{'\n'}(보상은 총 3회 제한됩니다.)</Text>
                 <View style={styles.myCodeBox}>
                   <Text style={{ color: '#38bdf8', fontSize: 11, fontWeight: 'bold', marginBottom: 4 }}>내 추천 코드</Text>
                   <Text style={{ color: '#f8fafc', fontSize: 20, fontWeight: 'bold', letterSpacing: 2 }}>{myReferralCode}</Text>
-                  <Text style={{ color: '#94a3b8', fontSize: 10, marginTop: 4 }}>친구 가입 시 입력하면 양방향 +100P & 쿠폰 지급!</Text>
+                  
                 </View>
                 <TextInput
                   style={styles.input}
@@ -2134,7 +2360,11 @@ const booksWithReports = books.filter(
       disabled={isLoading || referralCount >= 3} // 연타 및 3회 초과 시 터치 차단
     >
       <Text style={styles.submitBtnText}>
-        {referralCount >= 3 ? "등록 횟수 완료 (3/3)" : isLoading ? "처리 중..." : "추천 코드 등록하고 보상 받기"}
+        {referralCount >= 3
+      ? '등록 횟수 완료 (3/3)'
+      : isLoading
+      ? '처리 중...'
+      : '추천 코드 등록하고 보상 받기'}
       </Text>
     </TouchableOpacity>
   </View>
@@ -2209,15 +2439,15 @@ const styles = StyleSheet.create({
   pointCardValue: { color: '#f8fafc', fontSize: 14, fontWeight: 'bold' },
   exchangeHeaderBtn: { backgroundColor: '#1d4ed8', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6 },
   scrollContent: { padding: 16 },
-  sectionCategoryHeader: { color: '#38bdf8', fontSize: 13, fontWeight: 'bold', marginBottom: 8 },
+  sectionCategoryHeader: { color: '#ffffff', fontSize: 15, fontWeight: 'bold', marginBottom: 8 },
   actionGrid: { flexDirection: 'row', gap: 12, marginBottom: 8 },
   bigCard: { flex: 1, padding: 16, borderRadius: 16, justifyContent: 'space-between', height: 120 },
-  cardGreen: { backgroundColor: '#065f46' },
-  cardBlue: { backgroundColor: '#1d4ed8' },
-  cardPurple: { backgroundColor: '#5b21b6' },
-  cardOrange: { backgroundColor: '#c2410c' },
+  cardGreen: { backgroundColor: '#275ef7' },
+  cardBlue: { backgroundColor: '#275ef7' },
+  cardPurple: { backgroundColor: '#275ef7' },
+  cardOrange: { backgroundColor: '#275ef7' },
   cardIcon: { fontSize: 22, marginBottom: 4 },
-  cardTitle: { color: '#ffffff', fontSize: 14, fontWeight: 'bold' },
+  cardTitle: { color: '#ffffff', fontSize: 15, fontWeight: 'bold' },
   cardSub: { color: '#cbd5e1', fontSize: 10, marginTop: 4, lineHeight: 14 },
   borrowerSectionBox: { backgroundColor: '#1e293b', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#334155', marginBottom: 12 },
   borrowerBookCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#0f172a', padding: 10, borderRadius: 8, marginTop: 6, borderWidth: 1, borderColor: '#334155' },
@@ -2225,7 +2455,7 @@ const styles = StyleSheet.create({
   notificationAlertBox: { backgroundColor: '#78350f', padding: 12, borderRadius: 12, borderWidth: 1, borderColor: '#f59e0b', marginBottom: 12 },
   lowerGradeBtn: { backgroundColor: '#b45309', padding: 8, borderRadius: 6, alignItems: 'center', marginTop: 6 },
   toolsSection: { marginTop: 4 },
-  toolsHeader: { color: '#f8fafc', fontSize: 14, fontWeight: 'bold', marginBottom: 12 },
+  toolsHeader: { color: '#d0d3d6', fontSize: 13, fontWeight: 'bold', marginBottom: 12 },
   toolsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   toolBtn: { width: '48%', backgroundColor: '#1e293b', padding: 14, borderRadius: 12, alignItems: 'center', borderWidth: 1, borderColor: '#334155' },
   toolBtnText: { color: '#cbd5e1', fontSize: 12, fontWeight: '600' },
