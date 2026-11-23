@@ -114,7 +114,7 @@ const [selectedPreviewImage, setSelectedPreviewImage] = useState<string[] | stri
   const fetchBooks = async () => {
     if (!isLoggedIn) return; // 로그인 상태가 아닐 경우 도서 목록 조회 안 함
     try {
-      const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+      const serverUrl = "https://slouchy-swab-skimmed.ngrok-free.dev";
      const response = await fetch(`${serverUrl}/api/books`, {
   headers: {
     'ngrok-skip-browser-warning': '69420',
@@ -135,7 +135,7 @@ let parsedBookImages: string[] = [];
     try {
       const parsed = JSON.parse(item.image);
       parsedBookImages = Array.isArray(parsed) 
-        ? parsed.map((uri: string) => uri.startsWith('/uploads/') ? `https://snappingly-noncarnivorous-taren.ngrok-free.dev${uri}` : uri) 
+        ? parsed.map((uri: string) => uri.startsWith('/uploads/') ? `https://slouchy-swab-skimmed.ngrok-free.dev${uri}` : uri) 
         : [item.image];
     } catch (e) {
       parsedBookImages = [item.image];
@@ -213,7 +213,7 @@ initialHours: (item.rentalHours === 24 || calculatedLeft > 10800) ? 24 : (item.i
       .filter((uri: any) => typeof uri === 'string' && uri.trim().length > 0)
       .map((uri: string) => {
         if (uri.startsWith('/uploads/')) {
-          return `https://snappingly-noncarnivorous-taren.ngrok-free.dev${uri}`;
+          return `https://slouchy-swab-skimmed.ngrok-free.dev${uri}`;
         }
         return uri;
       }),
@@ -231,7 +231,7 @@ initialHours: (item.rentalHours === 24 || calculatedLeft > 10800) ? 24 : (item.i
  const fetchLimitSwitches = async () => {
   if (!isLoggedIn) return;
   try {
-    const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+    const serverUrl = "https://slouchy-swab-skimmed.ngrok-free.dev";
     const response = await fetch(`${serverUrl}/api/sensors/logs`, {
       method: 'GET',
       headers: { 
@@ -348,7 +348,7 @@ const handleLogin = async () => {
     return;
   }
   try {
-    const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+    const serverUrl = "https://slouchy-swab-skimmed.ngrok-free.dev";
     
     // 원본 코드에서 정상 작동하던 파라미터 형태('studentld') 그대로 전송
     const response = await fetch(`${serverUrl}/api/login`, {
@@ -416,7 +416,7 @@ setRentalCoupons(mappedCoupons);
     }
 
     try {
-      const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+      const serverUrl = "https://slouchy-swab-skimmed.ngrok-free.dev";
       const response = await fetch(`${serverUrl}/api/signup`, {
   method: 'POST',
   headers: { 
@@ -623,7 +623,7 @@ const handleSubmitReport = async () => {
   }
 
   try {
-    const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+    const serverUrl = "https://slouchy-swab-skimmed.ngrok-free.dev";
     
     const formData = new FormData();
     formData.append('bookId', String(selectedBookForReport.id));
@@ -700,7 +700,7 @@ const handleSubmitReport = async () => {
   else if (targetBook.condition === 'B급') nextCondition = 'C급';
   else nextCondition = 'C급';
 
-  const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+  const serverUrl = "https://slouchy-swab-skimmed.ngrok-free.dev";
   const isCurrentUserReporter = Boolean(reporterName && reporterName === currentUser.name);
   const nextPoints = isCurrentUserReporter ? userPoints + 100 : userPoints;
 
@@ -777,7 +777,7 @@ const handleSubmitReport = async () => {
   const executeKeepCondition = async (bookId: string, reportId: string) => {
     
     try {
-  const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+  const serverUrl = "https://slouchy-swab-skimmed.ngrok-free.dev";
   await fetch(`${serverUrl}/api/reports/${reportId}`, { method: 'DELETE' });
 } catch (error) {
   console.error('신고 삭제 통신 에러:', error);
@@ -802,7 +802,7 @@ const handleSubmitReport = async () => {
   const executeCancelReport = async (bookId: string, reportId: string) => {
     
     try {
-  const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+  const serverUrl = "https://slouchy-swab-skimmed.ngrok-free.dev";
   await fetch(`${serverUrl}/api/reports/${reportId}`, { method: 'DELETE' });
 } catch (error) {
   console.error('신고 삭제 통신 에러:', error);
@@ -829,7 +829,7 @@ const handleSubmitReport = async () => {
   }
 
   try {
-    const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+    const serverUrl = "https://slouchy-swab-skimmed.ngrok-free.dev";
     const response = await fetch(`${serverUrl}/api/gifticons/exchange`, {
       method: 'POST',
       headers: {
@@ -928,6 +928,7 @@ const handlePickBookImages = async () => {
 };
 
 const initiateReturnProcess = async (bookId: string) => {
+  if (checkPenaltyBlocked()) return;
   const targetBook = books.find((b) => b.id === bookId);
   if (!targetBook) return;
 
@@ -936,7 +937,7 @@ const initiateReturnProcess = async (bookId: string) => {
   const slotInt = getCabinetSlotNumber(targetBook.storageNo);
 
   try {
-    const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+    const serverUrl = "https://slouchy-swab-skimmed.ngrok-free.dev";
     const response = await fetch(`${serverUrl}/api/rentals/auth-code`, {
       method: 'POST',
       headers: {
@@ -975,6 +976,7 @@ const initiateReturnProcess = async (bookId: string) => {
 };
 
 const initiateRetrieveProcess = async (bookId: string) => {
+  if (checkPenaltyBlocked()) return;
   const targetBook = books.find((b) => b.id === bookId);
   if (!targetBook) return;
 
@@ -988,7 +990,7 @@ const initiateRetrieveProcess = async (bookId: string) => {
   const slotInt = getCabinetSlotNumber(targetBook.storageNo);
 
   try {
-    const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+    const serverUrl = "https://slouchy-swab-skimmed.ngrok-free.dev";
     const response = await fetch(`${serverUrl}/api/books/auth-code`, {
       method: 'POST',
       headers: {
@@ -1029,6 +1031,7 @@ const initiateRetrieveProcess = async (bookId: string) => {
 
 const initiateRegisterProcess = async () => {
   console.log("👉 [디버깅] '빈자리 자동 배정 및 인증 시작' 버튼이 눌렸습니다!");
+  if (checkPenaltyBlocked()) return;
   if (!newTitle || !newAuthor) {
     Alert.alert('오류', '책 이름과 저자를 입력해주세요.');
     return;
@@ -1066,7 +1069,7 @@ const initiateRegisterProcess = async () => {
   };
 
   try {
-    const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+    const serverUrl = "https://slouchy-swab-skimmed.ngrok-free.dev";
     const formData = new FormData();
     
     formData.append('title', bookData.title);
@@ -1125,6 +1128,7 @@ const getCabinetSlotNumber = (storageStr?: string): number => {
 };
 
 const initiateRentProcess = async (paymentMethod: string) => {
+  if (checkPenaltyBlocked()) return;
   const totalRequiredPoints =
     selectedBookForRent && selectedRentalType
       ? calculateRequiredPoints(selectedRentalType.hours, selectedBookForRent.condition)
@@ -1152,7 +1156,7 @@ if (targetBook.owner === currentUser.name) {
   const slotInt = getCabinetSlotNumber(targetBook.storageNo);
 
   try {
-    const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+    const serverUrl = "https://slouchy-swab-skimmed.ngrok-free.dev";
 
     // 1. 검증 전에 /api/rentals를 먼저 호출해 Rental 테이블에 대여 데이터 생성
     const rentalResponse = await fetch(`${serverUrl}/api/rentals`, {
@@ -1219,7 +1223,7 @@ if (targetBook.owner === currentUser.name) {
 
 const handleStep1KeypadSuccess = async () => {
   try {
-    const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+    const serverUrl = "https://slouchy-swab-skimmed.ngrok-free.dev";
     const targetData =
   pendingActionData?.bookData ||
   pendingActionData?.targetBook ||
@@ -1399,6 +1403,7 @@ const slotInt = getCabinetSlotNumber(currentStorageNo);
 };
 
   const handleApplyReferral = async () => {
+    if (checkPenaltyBlocked()) return;
   // 1. 이미 요청 중이거나(연타 방지), 3회를 다 채웠으면 실행 차단
   if (isLoading) return;
   if (referralCount >= 3) {
@@ -1420,7 +1425,7 @@ const slotInt = getCabinetSlotNumber(currentStorageNo);
   setIsLoading(true); // 통신 시작과 동시에 버튼 잠금 (연타 방지)
 
   try {
-    const serverUrl = "https://snappingly-noncarnivorous-taren.ngrok-free.dev";
+    const serverUrl = "https://slouchy-swab-skimmed.ngrok-free.dev";
     const response = await fetch(`${serverUrl}/api/referral`, {
       method: 'POST',
       headers: {
