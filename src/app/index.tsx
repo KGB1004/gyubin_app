@@ -12,7 +12,7 @@ export default function SmartLibraryApp() {
   const [isLoading, setIsLoading] = useState(false);       // 연타 방지용 로딩 상태
 const [referralCount, setReferralCount] = useState(0);   // 추천인 등록 횟수 (최대 3회)
 
-const [penaltyStatus, setPenaltyStatus] = useState(0); // 패널티 상태와 버튼 클릭 차단 헬퍼 추가
+const [penaltyStatus, setPenaltyStatus] = useState(0); // 패널티 상태와 버튼 클릭 차단 헬퍼
 const isPenaltyBlocked = penaltyStatus > 0;
 
 const checkPenaltyBlocked = () => {
@@ -511,8 +511,8 @@ setRentalCoupons(mappedCoupons);
         if (expiredTitle) {
           setPenaltyStatus((prev) => (prev > 0 ? prev : 1));
           Alert.alert(
-            '서비스 이용 정지 경고',
-            `[${expiredTitle}] 반납 기한을 초과하였습니다!\n규정을 1회 위반하였으므로 즉시 재가입 및 서비스 이용이 중지됩니다.`
+            '⚠️패널티 경고 알림',
+            `[${expiredTitle}] 반납 시간 초과!\n규정을 1회 위반하였으므로 즉시 재가입 및 서비스 이용이 중지됩니다.`
           );
         }
 
@@ -601,7 +601,7 @@ const handlePickReportImage = async () => {
   const openReportModal = () => {
     const myRentedBooks = books.filter((b) => b.borrower === currentUser.name);
     if (myRentedBooks.length === 0) {
-      Alert.alert('신고 불가', '현재 대여 중인 도서가 없어 분실/파손 신고를 접수할 수 없습니다.');
+      Alert.alert('신고 불가', '현재 대여 중인 도서가 없어 신고를 접수할 수 없습니다.');
       return;
     }
     const now = new Date();
